@@ -131,9 +131,10 @@ $$J(W,H)=D(V\,\|\,WH)+\frac{\mu}{2}\sum_{k}\sum_{t=2}^{T}\left(H_{kt}-H_{k,t-1}\
 *Short dated entries: what was done, what is next.*
 
 ### 2026-11-13
-- Read paper summary, brief and Track A guide.
+- Read paper, brief and Track A guide.
 - Drafted project structure and plan.
-- **Next:** create repository, commit plan, start `data.py`.
+- create repository, commit plan.
+- implement `data.py` generator
 
 ## 11. Open questions
 
