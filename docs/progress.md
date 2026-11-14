@@ -143,8 +143,8 @@ $$J(W,H)=D(V\,\|\,WH)+\frac{\mu}{2}\sum_{k}\sum_{t=2}^{T}\left(H_{kt}-H_{k,t-1}\
 
 ### 2026-11-14
 
-- Added full test suite for all modules
-- Implemented `baseline.py`
+- Added full test suite for all modules.
+- Implemented `baseline.py` and `alignment.py`.
 
 ## 11. Open questions
 
