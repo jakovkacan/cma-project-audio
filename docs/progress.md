@@ -10,60 +10,63 @@ This file records decisions, problems and next steps as they happen.
 
 ## 1. Project snapshot
 
-| Item | Value |
-|---|---|
-| Track | A — Audio, generalized-KL NMF of magnitude spectrograms |
-| Baseline | Multiplicative KL updates, frozen-dictionary inference |
-| Modification | Temporal smoothness penalty on activations, weight $\mu$ |
-| Primary metric (declared in advance) | Frame-level note $F_1$ on test clips, larger is better |
-| Secondary metrics | $D/(FT)$ (unpenalized KL), onset smearing, runtime |
-| Python / OS tested | _TODO_ |
-| Repository URL | _TODO_ |
-| Baseline tag / hash | _TODO_ |
-| Submission tag / full hash | `v1.0-submission` / _TODO_ |
+| Item                                 | Value                                                    |
+|--------------------------------------|----------------------------------------------------------|
+| Track                                | A — Audio, generalized-KL NMF of magnitude spectrograms  |
+| Baseline                             | Multiplicative KL updates, frozen-dictionary inference   |
+| Modification                         | Temporal smoothness penalty on activations, weight $\mu$ |
+| Primary metric (declared in advance) | Frame-level note $F_1$ on test clips, larger is better   |
+| Secondary metrics                    | $D/(FT)$ (unpenalized KL), onset smearing, runtime       |
+| Python / OS tested                   | _TODO_                                                   |
+| Repository URL                       | _TODO_                                                   |
+| Baseline tag / hash                  | _TODO_                                                   |
+| Submission tag / full hash           | `v1.0-submission` / _TODO_                               |
 
 ## 2. Scope statement
 
-- **Reproduced:** generalized-KL NMF, $V \approx WH$, multiplicative updates, templates in columns of $W$, activations in rows of $H$.
-- **Added protocol (not in the paper):** dictionary learned on development clips, frozen, activations inferred on held-out clips.
+- **Reproduced:** generalized-KL NMF, $V \approx WH$, multiplicative updates, templates in columns of $W$, activations
+  in rows of $H$.
+- **Added protocol (not in the paper):** dictionary learned on development clips, frozen, activations inferred on
+  held-out clips.
 - **Also demonstrated:** blind joint factorization on a single clip (coinciding-notes merge).
 - **Not reproduced:** the paper's real piano recording, Euclidean-cost experiments, energy-penalty variant (Eq. 4).
-- **Paper quirks noted:** printed gradient labels in Eqs. (5)–(6) are dimensionally swapped; use explicit KL updates (Eq. 7 form).
+- **Paper quirks noted:** printed gradient labels in Eqs. (5)–(6) are dimensionally swapped; use explicit KL updates
+  (Eq. 7 form).
 
 ## 3. Milestones
 
-| Dates | Milestone | Status |
-|---|---|---|
-| 13–14 Nov | Repo created, plan committed, `data.py`, `baseline.py`, baseline tests, **baseline tag** | ☐ |
-| 15–16 Nov | `alignment.py`, `metrics.py`, `protocol.py`, smoke config runs end to end | ☐ |
-| 17–18 Nov | `modified.py`, modification tests, validation selection of $\mu$ and thresholds | ☐ |
-| 19–20 Nov | Final experiments, ablation, stress cases, timing, figures | ☐ |
-| 21–22 Nov | Report (2–3 pages), README, clean-clone rehearsal | ☐ |
-| 23 Nov | Interview rehearsal, tag `v1.0-submission`, record hash | ☐ |
-| 24 Nov | Submit (buffer day only) | ☐ |
+| Dates     | Milestone                                                                                | Status |
+|-----------|------------------------------------------------------------------------------------------|--------|
+| 13–14 Nov | Repo created, plan committed, `data.py`, `baseline.py`, baseline tests, **baseline tag** | ☐     |
+| 15–16 Nov | `alignment.py`, `metrics.py`, `protocol.py`, smoke config runs end to end                | ☐     |
+| 17–18 Nov | `modified.py`, modification tests, validation selection of $\mu$ and thresholds          | ☐     |
+| 19–20 Nov | Final experiments, ablation, stress cases, timing, figures                               | ☐     |
+| 21–22 Nov | Report (2–3 pages), README, clean-clone rehearsal                                        | ☐     |
+| 23 Nov    | Interview rehearsal, tag `v1.0-submission`, record hash                                  | ☐     |
+| 24 Nov    | Submit (buffer day only)                                                                 | ☐     |
 
 ## 4. Fixed protocol choices
 
 Fill in and freeze **before** looking at test results.
 
-| Choice | Value | Decided on |
-|---|---|---|
-| Number of components $K$ | 3 | |
-| STFT | Hann, `nperseg=512`, `noverlap=384`, `fs=8000` | |
-| Magnitude normalization | _one constant fixed from development data, or $\mu=\tilde\mu/\text{mean}(V)$_ | |
-| Initialization | Positive, seeded, identical for both methods per clip | |
-| Iterations (both methods) | _TODO_ (fixed count) | |
-| `eps` floor | $10^{-10}$ | |
-| Development seeds | _e.g. 0–9_ | |
-| Validation seeds | _e.g. 100–109_ | |
-| Test seeds | _e.g. 1000–1029_ (≥ 20 paired cases per setting) | |
-| Difficulty settings | _three noise levels: low / mid / high_ | |
-| Threshold grid (both methods) | _TODO_ | |
-| $\mu$ grid (modified only) | _TODO_ | |
-| Baseline extra search budget (to match $\mu$ tuning) | _TODO_ | |
-| Component-to-pitch matching | Cosine similarity + one-to-one assignment, development data only | |
-| Scale fixing | _per-component constant from development data_ | |
-| Uncertainty | Mean paired difference with 95% CI, resampling over clips | |
+| Choice                                               | Value                                                                         | Decided on |
+|------------------------------------------------------|-------------------------------------------------------------------------------|------------|
+| Number of components $K$                             | 3                                                                             |            |
+| STFT                                                 | Hann, `nperseg=512`, `noverlap=384`, `fs=8000`                                |            |
+| Magnitude normalization                              | _one constant fixed from development data, or $\mu=\tilde\mu/\text{mean}(V)$_ |            |
+| Initialization                                       | Positive, seeded, identical for both methods per clip                         |            |
+| Iterations (both methods)                            | _TODO_ (fixed count)                                                          |            |
+| `eps` floor                                          | $10^{-10}$                                                                    |            |
+| Development seeds                                    | _e.g. 0–9_                                                                    |            |
+| Validation seeds                                     | _e.g. 100–109_                                                                |            |
+| Test seeds                                           | _e.g. 1000–1029_ (≥ 20 paired cases per setting)                              |            |
+| Difficulty settings                                  | _three noise levels: low / mid / high_                                        |            |
+| Threshold grid (both methods)                        | _TODO_                                                                        |            |
+| $\mu$ grid (modified only)                           | _TODO_                                                                        |            |
+| Baseline extra search budget (to match $\mu$ tuning) | _TODO_                                                                        |            |
+| Component-to-pitch matching                          | Cosine similarity + one-to-one assignment, development data only              |            |
+| Scale fixing                                         | _per-component constant from development data_                                |            |
+| Uncertainty                                          | Mean paired difference with 95% CI, resampling over clips                     |            |
 
 ## 5. Objective and modification (to fill in as derived)
 
@@ -79,8 +82,8 @@ $$J(W,H)=D(V\,\|\,WH)+\frac{\mu}{2}\sum_{k}\sum_{t=2}^{T}\left(H_{kt}-H_{k,t-1}\
 - **Monotonicity check:** _TODO — does $J$ decrease every iteration? If not, note and decide on the quadratic-root form_
 - **Prior work cited:** _TODO — Virtanen (2007); verify citation details_
 - **Hypothesis (written before experiments):**
-  - Helps when: _TODO_
-  - Hurts when: _TODO_
+    - Helps when: _TODO_
+    - Hurts when: _TODO_
 - **Extra cost introduced:** _TODO (expected small, $O(KT)$ per iteration)_
 
 ## 6. Verification checklist
@@ -114,30 +117,34 @@ $$J(W,H)=D(V\,\|\,WH)+\frac{\mu}{2}\sum_{k}\sum_{t=2}^{T}\left(H_{kt}-H_{k,t-1}\
 *Newest first. One entry per decision.*
 
 ### YYYY-MM-DD — _title_
-- **Context:** 
-- **Options considered:** 
-- **Decision:** 
-- **Why:** 
-- **Consequences / follow-ups:** 
+
+- **Context:**
+- **Options considered:**
+- **Decision:**
+- **Why:**
+- **Consequences / follow-ups:**
 
 ## 9. Problems and fixes
 
 | Date | Problem | Cause | Fix | Commit |
-|---|---|---|---|---|
-| | | | | |
+|------|---------|-------|-----|--------|
+|      |         |       |     |        |
 
 ## 10. Session notes
 
 *Short dated entries: what was done, what is next.*
 
 ### 2026-11-13
+
 - Read paper, brief and Track A guide.
 - Drafted project structure and plan.
 - Create repository, commit plan.
 - Implement `data.py` generator.
 
 ### 2026-11-14
-- Add `test_data.py` tests for `data.py`
+
+- Added full test suite for all modules
+- Implemented `baseline.py`
 
 ## 11. Open questions
 
@@ -175,6 +182,6 @@ $$J(W,H)=D(V\,\|\,WH)+\frac{\mu}{2}\sum_{k}\sum_{t=2}^{T}\left(H_{kt}-H_{k,t-1}\
 - **External methods / code cited:** _TODO_
 - **Collaboration:** _TODO_
 - **AI assistance:** _TODO_
-  - `progress.md` progress skeleton
-  - Docstring generation
-  - Unit tests `test_data.py`
+    - `progress.md` progress skeleton
+    - Docstring generation
+    - Unit tests `test_data.py`
