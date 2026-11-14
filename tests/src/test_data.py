@@ -1,0 +1,199 @@
+import numpy as np
+import pytest
+
+from src.data import make_music, make_clip, split_seeds, concat_clips
+
+FS = 8000
+SECONDS = 6
+# stft: nperseg=512, noverlap=384 -> hop 128, no padding/boundary
+N_FREQ = 257
+N_FRAMES = (FS * SECONDS - 512) // 128 + 1
+
+SPLIT_CONFIG = {"dev": [0, 10], "val": [100, 110], "test": [1000, 1030]}
+
+
+@pytest.fixture
+def clips():
+    return [make_clip(s, seconds=1) for s in (0, 1, 2)]
+
+
+# --- make_music -------------------------------------------------------------
+
+def test_make_music_shapes():
+    V, Y, freq, frames = make_music(0)
+    assert V.shape == (N_FREQ, N_FRAMES)
+    assert Y.shape == (3, N_FRAMES)
+    assert freq.shape == (N_FREQ,)
+    assert frames.shape == (N_FRAMES,)
+
+
+def test_make_music_dtypes_and_ranges():
+    V, Y, freq, frames = make_music(0)
+    assert Y.dtype == bool
+    assert np.all(V >= 0)
+    assert np.all(np.isfinite(V))
+    assert freq[0] == pytest.approx(0.0)
+    assert freq[-1] == pytest.approx(FS / 2)
+    assert np.all(np.diff(frames) > 0)
+
+
+def test_make_music_deterministic():
+    for x, y in zip(make_music(5), make_music(5)):
+        np.testing.assert_array_equal(x, y)
+
+
+def test_make_music_different_seeds_differ():
+    assert not np.array_equal(make_music(1)[0], make_music(2)[0])
+
+
+def test_make_music_each_pitch_active_somewhere():
+    _, Y, _, _ = make_music(0)
+    assert np.all(Y.any(axis=1))
+
+
+def test_make_music_custom_fs_and_seconds():
+    V, Y, freq, _ = make_music(0, fs=4000, seconds=2)
+    n = (4000 * 2 - 512) // 128 + 1
+    assert V.shape == (N_FREQ, n)
+    assert Y.shape == (3, n)
+    assert freq[-1] == pytest.approx(2000.0)
+
+
+# --- make_clip --------------------------------------------------------------
+
+def test_make_clip_keys_and_shapes():
+    clip = make_clip(3)
+    assert set(clip) == {"V", "Y", "freq", "times", "seed", "noise_std"}
+    assert clip["V"].shape == (N_FREQ, N_FRAMES)
+    assert clip["Y"].shape == (3, N_FRAMES)
+    assert clip["seed"] == 3
+    assert clip["noise_std"] == 0.005
+
+
+def test_make_clip_matches_make_music_with_default_noise():
+    V, Y, freq, frames = make_music(7)
+    clip = make_clip(7)
+    np.testing.assert_allclose(clip["V"], V)
+    np.testing.assert_array_equal(clip["Y"], Y)
+    np.testing.assert_array_equal(clip["freq"], freq)
+    np.testing.assert_array_equal(clip["times"], frames)
+
+
+def test_make_clip_deterministic():
+    a, b = make_clip(4), make_clip(4)
+    np.testing.assert_array_equal(a["V"], b["V"])
+    np.testing.assert_array_equal(a["Y"], b["Y"])
+
+
+def test_make_clip_noise_does_not_change_activity():
+    lo, hi = make_clip(4, noise_std=0.001), make_clip(4, noise_std=0.5)
+    np.testing.assert_array_equal(lo["Y"], hi["Y"])
+
+
+def test_make_clip_more_noise_raises_inactive_energy():
+    lo, hi = make_clip(4, noise_std=0.001), make_clip(4, noise_std=0.5)
+    silent = ~lo["Y"].any(axis=0)
+    assert silent.any()
+    assert hi["V"][:, silent].mean() > lo["V"][:, silent].mean()
+    assert hi["noise_std"] == 0.5
+
+
+@pytest.mark.parametrize("bad", [0, -1.0, np.nan, np.inf, -np.inf])
+def test_make_clip_invalid_noise_std(bad):
+    with pytest.raises(ValueError):
+        make_clip(0, noise_std=bad)
+
+
+# --- split_seeds ------------------------------------------------------------
+
+def test_split_seeds_expansion():
+    out = split_seeds(SPLIT_CONFIG)
+    assert out["dev"] == list(range(0, 10))
+    assert out["val"] == list(range(100, 110))
+    assert out["test"] == list(range(1000, 1030))
+
+
+def test_split_seeds_upper_bound_exclusive_and_tuples_ok():
+    out = split_seeds({"dev": (0, 3), "val": (3, 3), "test": (5, 7)})
+    assert out == {"dev": [0, 1, 2], "val": [], "test": [5, 6]}
+
+
+@pytest.mark.parametrize("key", ["dev", "val", "test"])
+def test_split_seeds_missing_key(key):
+    cfg = {k: v for k, v in SPLIT_CONFIG.items() if k != key}
+    with pytest.raises(ValueError):
+        split_seeds(cfg)
+
+
+@pytest.mark.parametrize("bad", [[1], [1, 2, 3]])
+@pytest.mark.parametrize("key", ["dev", "val", "test"])
+def test_split_seeds_wrong_interval_length(key, bad):
+    with pytest.raises(ValueError):
+        split_seeds(dict(SPLIT_CONFIG, **{key: bad}))
+
+
+def test_split_seeds_default_splits_disjoint():
+    out = split_seeds(SPLIT_CONFIG)
+    all_seeds = out["dev"] + out["val"] + out["test"]
+    assert len(all_seeds) == len(set(all_seeds))
+
+
+# --- concat_clips -----------------------------------------------------------
+
+def test_concat_clips_shapes_and_content(clips):
+    out = concat_clips(clips)
+    T = sum(c["V"].shape[1] for c in clips)
+    assert out["V"].shape == (N_FREQ, T)
+    assert out["Y"].shape == (3, T)
+    np.testing.assert_array_equal(
+        out["V"], np.concatenate([c["V"] for c in clips], axis=1))
+    np.testing.assert_array_equal(
+        out["Y"], np.concatenate([c["Y"] for c in clips], axis=1))
+
+
+def test_concat_clips_bounds_inclusive_and_contiguous(clips):
+    out = concat_clips(clips)
+    assert len(out["bounds"]) == 3
+    assert out["bounds"][0][0] == 0
+    for (s, e), clip in zip(out["bounds"], clips):
+        assert e - s + 1 == clip["V"].shape[1]
+    for (_, e), (s, _) in zip(out["bounds"], out["bounds"][1:]):
+        assert s == e + 1
+    assert out["bounds"][-1][1] == out["V"].shape[1] - 1
+
+
+def test_concat_clips_bounds_slice_recovers_clip(clips):
+    out = concat_clips(clips)
+    for (s, e), clip in zip(out["bounds"], clips):
+        np.testing.assert_array_equal(out["V"][:, s:e + 1], clip["V"])
+        np.testing.assert_array_equal(out["Y"][:, s:e + 1], clip["Y"])
+
+
+def test_concat_clips_single_clip(clips):
+    out = concat_clips(clips[:1])
+    np.testing.assert_array_equal(out["V"], clips[0]["V"])
+    assert out["bounds"] == [(0, clips[0]["V"].shape[1] - 1)]
+
+
+def test_concat_clips_different_lengths_ok():
+    a, b = make_clip(0, seconds=1), make_clip(1, seconds=2)
+    out = concat_clips([a, b])
+    assert out["V"].shape[1] == a["V"].shape[1] + b["V"].shape[1]
+
+
+def test_concat_clips_mismatched_freq_dimension(clips):
+    bad = dict(clips[0], V=clips[0]["V"][:-1])
+    with pytest.raises(ValueError):
+        concat_clips([clips[0], bad])
+
+
+@pytest.mark.parametrize("present", ["V", "Y"])
+def test_concat_clips_missing_keys(clips, present):
+    with pytest.raises(KeyError):
+        concat_clips([{present: clips[0][present]}])
+
+
+def test_concat_clips_mismatched_time_dimension_between_V_and_Y(clips):
+    bad = dict(clips[0], Y=clips[0]["Y"][:, :-1])
+    with pytest.raises(ValueError):
+        concat_clips([clips[0], bad])
