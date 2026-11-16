@@ -146,6 +146,10 @@ $$J(W,H)=D(V\,\|\,WH)+\frac{\mu}{2}\sum_{k}\sum_{t=2}^{T}\left(H_{kt}-H_{k,t-1}\
 - Added full test suite for all modules.
 - Implemented `baseline.py` and `alignment.py`.
 
+### 2026-11-16
+
+- Partial `metrics.py` implementation.
+
 ## 11. Open questions
 
 - [ ] _e.g. Is the simple split-gradient $H$ update monotone, or is the exact quadratic form needed?_
