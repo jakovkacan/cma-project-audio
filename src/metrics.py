@@ -1,8 +1,41 @@
+"""Evaluation metrics and threshold selection for NMF note transcription.
+
+A note is predicted where the scaled activation exceeds a threshold,
+``pred = H_scaled > theta``. This module scores such predictions against the
+binary note activity ``Y`` with frame-level F1, measures reconstruction quality
+as KL divergence per matrix entry, measures onset timing error, and selects
+``theta`` on validation clips.
+"""
+
 import numpy as np
 from src.baseline import kl_divergence
 
 
 def frame_f1(pred, true):
+    """Compute frame-level F1 over all (pitch, frame) entries of one clip.
+
+    ``F1 = 2 TP / (2 TP + FP + FN)``, defined as 0 when the denominator is 0
+    (both arrays all-false).
+
+    Parameters
+    ----------
+    pred : array_like of bool, shape (K, T)
+        Predicted note activity.
+    true : array_like of bool, shape (K, T)
+        Ground-truth note activity ``Y``.
+
+    Returns
+    -------
+    dict
+        ``"f1"`` : float -- frame-level F1 score in ``[0, 1]``.
+        ``"tp"``, ``"fp"``, ``"fn"`` : int -- true positive, false positive
+        and false negative counts.
+
+    Raises
+    ------
+    ValueError
+        If ``pred`` and ``true`` differ in shape.
+    """
     pred = np.asarray(pred)
     true = np.asarray(true)
 
@@ -25,6 +58,28 @@ def frame_f1(pred, true):
 
 
 def kl_per_entry(V, W, H, eps=1e-10):
+    """Compute the generalized KL divergence per entry, ``D(V || WH) / (F T)``.
+
+    Normalizing by the number of entries makes the value comparable across
+    clips of different lengths.
+
+    Parameters
+    ----------
+    V : array_like, shape (F, T)
+        Non-negative magnitude spectrogram.
+    W : array_like, shape (F, K)
+        Non-negative spectral templates.
+    H : array_like, shape (K, T)
+        Non-negative activations.
+    eps : float, optional
+        Floor passed to ``kl_divergence`` to avoid ``log(0)`` and division by
+        zero. Default ``1e-10``.
+
+    Returns
+    -------
+    float
+        Mean KL divergence per entry of ``V``.
+    """
     V = np.asarray(V)
     W = np.asarray(W)
     H = np.asarray(H)
@@ -36,36 +91,126 @@ def kl_per_entry(V, W, H, eps=1e-10):
 
 
 def onset_lags(pred, true, max_lag=8):
-    pred = np.asarray(pred).flatten()
-    true = np.asarray(true).flatten()
+    """Measure onset timing error between predicted and true note activity.
+
+    A true onset is a frame ``t0`` with ``Y[k, t0] = 1`` and
+    ``Y[k, t0 - 1] = 0``, where ``Y[k, -1]`` is taken to be 0, so a note active
+    at the first frame counts as an onset. For each onset, the window
+    ``[t0 - max_lag, t0 + max_lag]`` (inclusive, clipped to the clip) of the
+    same pitch is searched. The lag is the first predicted frame in the window
+    minus ``t0``. If the window holds no prediction, the onset counts as missed.
+
+    Negative lags mean the prediction starts early, as from temporal smearing.
+    Positive lags mean it starts late. With hop 128 at 8 kHz, one frame is
+    16 ms.
+
+    Parameters
+    ----------
+    pred : array_like of bool, shape (K, T) or (T,)
+        Predicted note activity.
+    true : array_like of bool, shape (K, T) or (T,)
+        Ground-truth note activity ``Y``.
+    max_lag : int, optional
+        Half-width ``L`` of the search window in frames. Default 8 (128 ms).
+
+    Returns
+    -------
+    dict
+        ``"lags"`` : ndarray of int -- lag in frames for each detected onset,
+        ordered by pitch, then time.
+        ``"missed"`` : int -- number of onsets with no prediction in the
+        window.
+        ``"n_onsets"`` : int -- total number of true onsets, so
+        ``len(lags) + missed == n_onsets``.
+
+    Raises
+    ------
+    ValueError
+        If ``pred`` and ``true`` differ in shape.
+    """
+    pred = np.atleast_2d(np.asarray(pred, dtype=bool))
+    true = np.atleast_2d(np.asarray(true, dtype=bool))
 
     if pred.shape != true.shape:
         raise ValueError("pred and true must be of same shape.")
 
-    n = len(true)
-    true_onset_indices = []
-    pred_onset_indices = []
-    l = []
+    lags = []
     missed = 0
+    n_onsets = 0
 
-    if true[0]:
-        true_onset_indices.append(0)
+    for p_row, y_row in zip(pred, true):  # one pitch (row) at a time
+        T = len(y_row)
+        prev = np.concatenate([[False], y_row[:-1]])  # Y_{k,-1} = 0
+        onsets = np.flatnonzero(y_row & ~prev)
+        n_onsets += len(onsets)
 
-    for i in range(1, n):
-        if true[i] and not true[i - 1]:
-            true_onset_indices.append(i)
-
-    for i in range(len(true_onset_indices)):
-        for j in range(max(0, true_onset_indices[i] - max_lag), min(n, true_onset_indices[i] + max_lag)):
-            if pred[j]:
-                pred_onset_indices.append(j)
-                l.append(j - true_onset_indices[i])
-                break
-
-        missed += 1
+        for t0 in onsets:
+            lo = max(0, t0 - max_lag)
+            hi = min(T, t0 + max_lag + 1)  # window [t0 - L, t0 + L] is inclusive
+            hits = np.flatnonzero(p_row[lo:hi])
+            if hits.size:
+                lags.append(lo + hits[0] - t0)
+            else:
+                missed += 1
 
     return {
-        "lags": np.array(l, dtype=int),
-        "missed": missed,
-        "n_onsets": len(true_onset_indices)
+        "lags": np.array(lags, dtype=int),
+        "missed": int(missed),
+        "n_onsets": int(n_onsets)
+    }
+
+
+# Generated by Claude Code
+def select_threshold(H_scaled_list, Y_list, grid):
+    """Select the detection threshold that maximizes mean per-clip F1.
+
+    For each ``theta`` in ``grid``, every clip is thresholded as
+    ``H_scaled > theta`` and scored with ``frame_f1``. The F1 scores are
+    averaged over clips, so each clip carries equal weight whatever its length;
+    frames are not pooled. The best ``theta`` is chosen, with ties broken by the
+    smallest ``theta``. Use validation clips only, never test clips.
+
+    Parameters
+    ----------
+    H_scaled_list : sequence of array_like, each shape (K, T_i)
+        Scaled activations, one array per clip.
+    Y_list : sequence of array_like of bool, each shape (K, T_i)
+        Ground-truth note activity, aligned with ``H_scaled_list``.
+    grid : array_like of float, shape (G,)
+        Candidate thresholds, e.g.
+        ``np.round(np.arange(0.05, 0.951, 0.05), 2)``.
+
+    Returns
+    -------
+    dict
+        ``"threshold"`` : float -- selected threshold, a value from ``grid``.
+        ``"grid"`` : ndarray of float, shape (G,) -- the candidate thresholds.
+        ``"mean_f1"`` : ndarray of float, shape (G,) -- mean per-clip F1 for
+        each threshold, aligned with ``grid``.
+
+    Raises
+    ------
+    ValueError
+        If the two lists differ in length or are empty, or a clip's
+        activations and labels differ in shape.
+    """
+    grid =np.asarray(grid, dtype=float)
+
+    if len(H_scaled_list) != len(Y_list):
+        raise ValueError("H_scaled_list and Y_list must have the same length.")
+    if len(H_scaled_list) == 0:
+        raise ValueError("At least one clip is required.")
+
+    mean_f1 = np.array([
+        np.mean([frame_f1(np.asarray(H) > theta, np.asarray(Y, dtype=bool))["f1"]
+                 for H, Y in zip(H_scaled_list, Y_list)])
+        for theta in grid
+    ])
+
+    best = int(np.argmax(mean_f1))  # first maximum -> smallest theta on ties
+
+    return {
+        "threshold": float(grid[best]),
+        "grid": grid,
+        "mean_f1": mean_f1
     }

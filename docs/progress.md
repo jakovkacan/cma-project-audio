@@ -189,3 +189,4 @@ $$J(W,H)=D(V\,\|\,WH)+\frac{\mu}{2}\sum_{k}\sum_{t=2}^{T}\left(H_{kt}-H_{k,t-1}\
     - `progress.md` progress skeleton
     - Docstring generation
     - Unit tests `test_data.py`
+    - fixes for `onset_lags` and `select_threshold`
