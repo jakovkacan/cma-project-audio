@@ -150,6 +150,11 @@ $$J(W,H)=D(V\,\|\,WH)+\frac{\mu}{2}\sum_{k}\sum_{t=2}^{T}\left(H_{kt}-H_{k,t-1}\
 
 - Partial `metrics.py` implementation.
 
+### 2026-11-24
+
+- Completed `metrics.py` implementation.
+- Implemented `protocol.py`
+
 ## 11. Open questions
 
 - [ ] _e.g. Is the simple split-gradient $H$ update monotone, or is the exact quadratic form needed?_
