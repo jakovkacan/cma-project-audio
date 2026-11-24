@@ -1,3 +1,6 @@
 /.idea
 .venv
 /results
+/docs/baseline_guide.pdf
+.DS_Store
+__pycache__/
