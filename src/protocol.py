@@ -9,7 +9,7 @@ from src.metrics import frame_f1, kl_per_entry, onset_lags, select_threshold
 
 
 def learn_dictionary(config):
-    """Learn the aligned, frozen dictionary from development clips (guide 6.1, steps 1-4).
+    """Learn the aligned, frozen dictionary from development clips.
 
     Only development seeds are used, so validation and test data never
     influence the templates or the scales.
@@ -76,7 +76,7 @@ def _threshold_grid(spec):
 
 
 def _timed_inference(V, W, config, seed):
-    """Infer activations, timed as in guide 6.4 (``track_loss=False``).
+    """Infer activations, timed (``track_loss=False``).
 
     Runs ``warmup`` untimed calls, then ``repeats`` timed calls with
     :func:`time.perf_counter`, and returns the activations and the median time.
@@ -99,7 +99,7 @@ def _timed_inference(V, W, config, seed):
 
 
 def evaluate_setting(dictionary, noise_std, config, method="baseline"):
-    """Evaluate a frozen dictionary at one noise level (guide 6.1, steps 5-6).
+    """Evaluate a frozen dictionary at one noise level.
 
     The threshold is selected on validation clips only; test labels are used
     only for the final scoring. Inference on each clip uses the clip seed.

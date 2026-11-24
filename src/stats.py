@@ -14,7 +14,7 @@ def mean_ci(values, level=0.95):
 
     The interval is ``mean ± t_{1 - alpha/2, n-1} * s / sqrt(n)``, where
     ``alpha = 1 - level`` and ``s`` is the sample standard deviation with
-    ``n - 1`` in the denominator (Eq. 16 of the project guide).
+    ``n - 1`` in the denominator.
 
     Parameters
     ----------
