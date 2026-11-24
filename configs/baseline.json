@@ -1,0 +1,45 @@
+{
+  "name": "baseline",
+  "seeds": {
+    "dev": [
+      0,
+      10
+    ],
+    "val": [
+      100,
+      110
+    ],
+    "test": [
+      1000,
+      1030
+    ]
+  },
+  "dev_noise_std": 0.005,
+  "noise_levels": [
+    0.05,
+    0.10,
+    0.20
+  ],
+  "n_components": 3,
+  "restart_seeds": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "n_iter_dict": 300,
+  "n_iter_infer": 200,
+  "eps": 1e-10,
+  "threshold_grid": {
+    "start": 0.05,
+    "stop": 0.95,
+    "step": 0.05
+  },
+  "scale_percentile": 95.0,
+  "onset_max_lag": 8,
+  "timing": {
+    "warmup": 1,
+    "repeats": 5
+  },
+  "output_dir": "results/baseline"
+}

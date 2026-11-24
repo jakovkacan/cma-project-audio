@@ -154,6 +154,7 @@ $$J(W,H)=D(V\,\|\,WH)+\frac{\mu}{2}\sum_{k}\sum_{t=2}^{T}\left(H_{kt}-H_{k,t-1}\
 
 - Completed `metrics.py` implementation.
 - Implemented `protocol.py`
+- Added `smoke` and `baseline` configs
 
 ## 11. Open questions
 
