@@ -19,7 +19,7 @@ This file records decisions, problems and next steps as they happen.
 | Secondary metrics                    | $D/(FT)$ (unpenalized KL), onset smearing, runtime                    |
 | Python / OS tested                   | Python 3.13.18, NumPy 2.5.4, SciPy 1.18.1, Matplotlib 3.11.2, pytest 9.2.0; macOS 27.2.1, Apple M4 (arm64) |
 | Repository URL                       | https://github.com/jakovkacan/cma-project-audio                       |
-| Baseline tag / hash                  | `v0.1-baseline` / _TODO — tag not created yet_                        |
+| Baseline tag / hash                  | `v0.1-baseline` / tag `8ed44d4e772439dbc8727943ca60af1628660545` (`git rev-parse v0.1-baseline`), commit `3e68fd954a6756b7fea799edb271495a7da345be` |
 | Submission tag / full hash           | `v1.0-submission` / _TODO_                                            |
 
 ## 2. Scope statement
@@ -200,7 +200,9 @@ Full suite on 2026-11-24: 203 passed, 1 skipped (the optional `requirements-dev.
 - Added `make_figures.py`; both configs run end to end and produce the three figures.
 - Re-ran the restart and noise-calibration checks; recorded them in the decision log.
 - Wrote `README.md`.
-- **Next:** commit `make_figures.py`, tag `v0.1-baseline` and record its hash; then start `modified.py`.
+- Fresh clone of `3e68fd9`: 203 passed, 1 skipped; smoke run and figures OK.
+- Tagged `v0.1-baseline` (annotated) on `3e68fd9`.
+- **Next:** start `modified.py`.
 
 ## 10. Open questions
 
