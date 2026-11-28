@@ -71,6 +71,11 @@ def baseline():
 
 
 @pytest.fixture(scope="session")
+def modified():
+    return _import_or_skip("src.modified")
+
+
+@pytest.fixture(scope="session")
 def alignment():
     return _import_or_skip("src.alignment")
 

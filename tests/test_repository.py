@@ -13,7 +13,7 @@ from conftest import REPO_ROOT
 REQUIRED = [
     "README.md", "requirements.txt", ".gitignore", "run_experiments.py", "make_figures.py",
     "configs/smoke.json", "configs/baseline.json", "docs/progress.md",
-    "src/__init__.py", "src/data.py", "src/baseline.py", "src/alignment.py", "src/metrics.py",
+    "src/__init__.py", "src/data.py", "src/baseline.py", "src/modified.py", "src/alignment.py", "src/metrics.py",
     "src/stats.py", "src/timing.py", "src/protocol.py",
 ]
 CONFIG_KEYS = {

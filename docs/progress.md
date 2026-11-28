@@ -68,8 +68,21 @@ Modified objective:
 
 $$J(W,H)=D(V\,\|\,WH)+\frac{\mu}{2}\sum_{k}\sum_{t=2}^{T}\left(H_{kt}-H_{k,t-1}\right)^2$$
 
-- **Update rule derived:** _TODO — positive/negative gradient split, boundary frames_
-- **Monotonicity check:** _TODO — does $J$ decrease every iteration? If not, note and decide on the quadratic-root form_
+- **Update rule derived (2026-11-28, `src/modified.py::update_activations_smooth`):** the penalty gradient is
+  $\partial P/\partial H_{kt}=\mu(c_tH_{kt}-N_{kt})$ with $N_{kt}=H_{k,t-1}+H_{k,t+1}$ (existing neighbours only) and
+  $c_t$ the neighbour count (2 inside, 1 at the first and last frame, 0 if $T=1$). Splitting the gradient of $J$ into
+  positive and negative parts gives
+  $$H_{kt}\leftarrow H_{kt}\,\frac{\sum_f W_{fk}Q_{ft}+\mu N_{kt}}{\sum_f W_{fk}+\mu c_tH_{kt}}.$$
+  With $\mu=0$ this is the baseline update bit for bit. Extra work is $O(KT)$ per iteration. Only inference changes;
+  $W$ comes from the baseline `learn_dictionary` and stays frozen, and the initial $H$ is the baseline's for the same seed.
+- **Monotonicity check (2026-11-28):** the gradient-split rule has no descent proof, so it was checked empirically.
+  With the smoke dictionary on validation clip 100 at noise 0.05 and 0.20, $J$ never increased over 500 iterations for
+  $\mu\in\{0.01,0.1,1,10,100,1000\}$; the tests also check it on random data and on clip 0
+  (`test_objective_monotone_on_*`). The quadratic-root form is not needed for now.
+  **Caveat:** for $\mu\ge100$, $J$ is still falling at 200 iterations (the `n_iter_infer` budget), because the random
+  start is far from smooth. Large-$\mu$ results at a fixed budget partly reflect incomplete convergence, so record this
+  when choosing the $\mu$ grid. On these clips mean $H\approx0.5$–$1$; the penalty barely changes $J$ for
+  $\mu\le0.1$, so a useful grid probably lies around $\mu\in[1,100]$ (to be selected on validation clips).
 - **Prior work cited:** _TODO — Virtanen (2007); verify citation details_
 - **Hypothesis (written before experiments):**
     - Helps when: _TODO_
@@ -90,8 +103,8 @@ $$J(W,H)=D(V\,\|\,WH)+\frac{\mu}{2}\sum_{k}\sum_{t=2}^{T}\left(H_{kt}-H_{k,t-1}\
   `test_monotone_on_clip`)
 - [x] Inputs not mutated (`test_inputs_not_mutated` and similar, in every module)
 - [x] Template normalization leaves $WH$ unchanged (`test_product_unchanged_and_columns_sum_to_one`)
-- [ ] Constant-in-time $H$ gives zero penalty
-- [ ] Modified with $\mu=0$ equals baseline
+- [x] Constant-in-time $H$ gives zero penalty (`test_constant_in_time_is_zero`, `test_constant_activations_recovered`)
+- [x] Modified with $\mu=0$ equals baseline (`test_mu_zero_is_baseline_exactly`, update and inference, bitwise)
 - [ ] Optional cross-check against an external KL-NMF (validation only, cited, kept separate)
 
 Full suite on 2026-11-24: 203 passed, 1 skipped (the optional `requirements-dev.txt` check), about 40 s.
