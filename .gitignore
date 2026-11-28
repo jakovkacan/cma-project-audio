@@ -1,6 +1,17 @@
 /.idea
 .venv
-/results
+# Results: keep the submitted comparison runs (tables, run info, figures), not the rest.
+/results/*
+!/results/final/
+!/results/final_wide/
+!/results/stress_short/
+!/results/stress_short_wide/
+!/results/stress_timbre/
+!/results/stress_timbre_wide/
+# Example-clip arrays are large binaries; rerunning a config regenerates them.
+/results/*/example_clip.npz
+# Drafting notes for the report stay outside the repository.
+/docs/report_notes.md
 /docs/baseline_guide.pdf
 .DS_Store
 __pycache__/

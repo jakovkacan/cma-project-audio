@@ -49,16 +49,16 @@ Fill in and freeze **before** looking at test results.
 | Validation seeds                                     | 100–109                                                                                                 | 2026-11-24 |
 | Test seeds                                           | 1000–1029 (30 cases per setting)                                                                        | 2026-11-24 |
 | Difficulty settings                                  | Noise std 0.05 / 0.10 / 0.20 (easy / medium / hard); see decision log                                   | 2026-11-24 |
-| Threshold grid (both methods)                        | 0.05, 0.10, …, 0.95; re-selected per noise level on validation, ties to the smallest $\theta$           | 2026-11-24 |
+| Threshold grid (both methods)                        | 0.05, 0.10, …, 0.95; re-selected per noise level on validation, ties to the smallest $\theta$. A grid to 3.0 is run as a sensitivity check (`*_wide` configs; decision log 2026-11-28) | 2026-11-24 |
 | $\mu$ grid (modified only)                           | 0.3, 1, 3, 10, 30, 100; selected jointly with $\theta$ per noise level on validation, ties to the smallest $\mu$. $\mu=0$ is excluded (the method always smooths); it runs separately as the ablation `smooth_mu0`. Chosen from validation clip 100 only | 2026-11-28 |
-| Baseline extra search budget (to match $\mu$ tuning) | _TODO — modified searches 6 × 19 = 114 ($\mu$, $\theta$) pairs, baseline 19. Option: a 6× finer $\theta$ grid for the baseline. Less pressing now that the modified method does not win (see Section 11)_ |            |
+| Baseline extra search budget (to match $\mu$ tuning) | Not matched: `smooth` searches 6 × 19 = 114 ($\mu$, $\theta$) pairs, the post-hoc controls 5 × 19 = 95, the baseline 19. The extra search can only favour the tuned methods, so it biases the comparison towards them; the penalty still does not beat the baseline, and the control's gains are reported with this caveat | 2026-11-28 |
 | Component-to-pitch matching                          | Cosine similarity to exclusive-frame reference templates + Hungarian assignment, development data only  | 2026-11-14 |
 | Scale fixing                                         | $c_k$ = 95th percentile of development activations over frames where pitch $k$ sounds                   | 2026-11-14 |
-| Uncertainty                                          | Mean with Student-t 95% interval over clips (`src/stats.py::mean_ci`); applied to paired differences once the modification exists | 2026-11-24 |
+| Uncertainty                                          | Mean with Student-t 95% interval over clips (`src/stats.py::mean_ci`), applied to the per-clip paired differences method − baseline (`paired.csv`) | 2026-11-24 |
 
 Dates are those of the commits that introduced each choice into the code or configs.
 
-## 4. Objective and modification (to fill in as derived)
+## 4. Objective and modification
 
 Baseline objective:
 
@@ -83,11 +83,23 @@ $$J(W,H)=D(V\,\|\,WH)+\frac{\mu}{2}\sum_{k}\sum_{t=2}^{T}\left(H_{kt}-H_{k,t-1}\
   start is far from smooth. Large-$\mu$ results at a fixed budget partly reflect incomplete convergence, so record this
   when choosing the $\mu$ grid. On these clips mean $H\approx0.5$–$1$; the penalty barely changes $J$ for
   $\mu\le0.1$, so a useful grid probably lies around $\mu\in[1,100]$ (to be selected on validation clips).
-- **Prior work cited:** _TODO — Virtanen (2007); verify citation details_
-- **Hypothesis (written before experiments):**
-    - Helps when: _TODO_
-    - Hurts when: _TODO_
-- **Extra cost introduced:** _TODO (expected small, $O(KT)$ per iteration)_
+- **Prior work cited:** T. Virtanen, "Monaural sound source separation by nonnegative matrix factorization with
+  temporal continuity and sparseness criteria," *IEEE Transactions on Audio, Speech, and Language Processing*, 15(3),
+  1066–1074, 2007. Virtanen normalizes the penalty by each row's energy; this project uses the plain quadratic form
+  and selects $\mu$ per noise level instead. Implemented independently; not presented as new.
+- **Hypothesis** (formulated on 2026-11-28 before the first baseline-vs-modified run, from the baseline's behaviour
+  and Virtanen (2007); written into this log after that run):
+    - *Mechanism assumed:* under noise, activations fluctuate from frame to frame, so single frames cross $\theta$
+      (false positives) or dip below it inside held notes (holes); a penalty on frame-to-frame change removes both.
+    - *Helps when:* noise is high (σ = 0.20, baseline $F_1$ 0.545); little change at σ = 0.05 (near ceiling).
+    - *Hurts when:* at note onsets and offsets, because a quadratic penalty works hardest against large jumps; onsets
+      should be smeared and short notes should suffer most.
+    - *Outcome:* the "hurts" predictions held (onset error up; short notes cost about twice as much); the "helps"
+      prediction did not (no gain at any noise level). The assumed mechanism is not the dominant error (Section 11).
+- **Extra cost introduced:** two extra $K\times T$ arrays and $O(KT)$ work per iteration, small next to the
+  $O(FTK)$ KL update. Measured: +1–3 ms per clip (≈ 33 → 34–37 ms, 3–8%), with ≈ 1 ms differences within timing noise
+  (the $\mu=0$ ablation, which does no extra arithmetic, also shows +0.7 to +1.5 ms). Selecting $\mu$ adds six
+  validation inference passes per clip, a one-off setup cost per condition.
 
 ## 5. Verification checklist
 
@@ -108,12 +120,14 @@ $$J(W,H)=D(V\,\|\,WH)+\frac{\mu}{2}\sum_{k}\sum_{t=2}^{T}\left(H_{kt}-H_{k,t-1}\
 - [ ] Optional cross-check against an external KL-NMF (validation only, cited, kept separate)
 
 Full suite on 2026-11-24: 203 passed, 1 skipped (the optional `requirements-dev.txt` check), about 40 s.
+Full suite on 2026-11-28 (modification, control, stress options): 323 passed, 1 skipped, about 1 min.
 
 ## 6. Experiment checklist
 
 - [x] Smoke config runs in about a minute and shows both methods — about 5 s, `baseline` and `smooth` ($\mu$ grid 1, 10, 100)
-- [ ] Final config reproduces all tables and figures — `configs/final.json` runs in about 90 s and writes
-  `cases.csv`, `summary.csv`, `paired.csv`, `run_info.json`, `example_clip.npz`; paired-comparison figure still to come
+- [x] Final config reproduces all tables and figures — `configs/final.json` runs in about 2.5 min and writes
+  `cases.csv`, `summary.csv`, `paired.csv`, `run_info.json`, `example_clip.npz`; `make_figures.py` draws six figures.
+  The six submitted runs are kept in the repository under `results/` (without the `.npz` arrays)
 - [x] Three difficulty settings, ≥ 20 paired clips each — three settings × 30 test clips, paired by seed;
   differences in `paired.csv`
 - [x] Ablation: $\mu=0$ with threshold re-selected — `smooth_mu0` in `configs/final.json`; every quality difference
@@ -235,6 +249,9 @@ Full suite on 2026-11-24: 203 passed, 1 skipped (the optional `requirements-dev.
 | 2026-11-14 | `concat_clips` accepted clips whose $V$ and $Y$ lengths differed  | No length check      | Check that frame counts agree; raise otherwise | `56ba539` |
 | 2026-11-14 | `split_seeds` accepted empty and overlapping seed ranges          | No validation        | Raise `ValueError` for empty or overlapping ranges | `7a25ec4` |
 | 2026-11-14 | `make_clip` rejected `noise_std = 0`                              | Bound was strict     | Allow `noise_std = 0`                       | `7a25ec4` |
+| 2026-11-28 | Adding `harmonic_amps` broke bit-identity of default clips with `make_music` | Multiplying by $1/h$ rounds differently from dividing by $h$ | Keep the division on the default path | `872a139` |
+| 2026-11-28 | Baseline selected θ = 0.95 (grid top) with short notes at σ = 0.20; its validation $F_1$ was still rising | Activation floor in silence ≈ 1.0, best θ above the guide's grid | `*_wide` sensitivity configs with θ up to 3.0 (decision log) | `872a139` |
+| 2026-11-28 | `fig_validation.png` warned on a log axis for the ablation | Grid `[0.0]` has no positive value and no curve | Skip one-value grids in that figure | `872a139` |
 
 ## 9. Session notes
 
@@ -280,20 +297,29 @@ Full suite on 2026-11-24: 203 passed, 1 skipped (the optional `requirements-dev.
   predictions change *less* often than the labels (80 vs 120 changes). The off-note 95th percentile of the scaled
   activations is ≈ 1.0, which means a raised floor rather than frame-to-frame jitter. A smoothness penalty cannot lower
   a floor.
-- Added the post-hoc control (`src/postprocess.py`), stress options and configs, the paired / validation / per-method
-  example figures, and `docs/report_notes.md` (hypothesis, results, interpretation).
+- Added the post-hoc control (`src/postprocess.py`), stress options and configs, and the paired / validation /
+  per-method example figures.
 - Found that the standard threshold grid limits the baseline at σ = 0.20; added `*_wide` sensitivity runs (decision log).
-- **Next:** review `docs/report_notes.md`; finalize the assistance statement; write the report; tag `v1.0-submission`.
+- Filled in the hypothesis (Section 4) and the results summary (Section 11).
+- Fresh clone of `872a139` (branch `modified-smoothness`): quick suite 310 passed, 1 skipped, 13 slow deselected;
+  smoke run and all six figures OK.
+- `.gitignore` now keeps the six submitted result folders under `results/` (tables, `run_info.json`, figures; no
+  `.npz`) and keeps drafting notes for the report out of the repository; not committed yet.
+- **Next:** decide the primary threshold grid (Section 10); finalize the assistance statement; write the report;
+  merge into `main`; tag `v1.0-submission`.
 
 ## 10. Open questions
 
 - [x] Is the simple split-gradient $H$ update monotone, or is the exact quadratic form needed? — monotone in every
   check so far (Section 4); the exact form is not needed.
 - [x] Which noise levels give a useful spread of baseline $F_1$? — 0.05 / 0.10 / 0.20 (see decision log).
-- [ ] The selected $\theta$ is not monotone in noise (0.40, 0.55, 0.35). Why does it drop at 0.20? Look at the
-  validation $F_1$ curves in `run_info.json["validation"]`. — Likely lead (2026-11-28): at σ = 0.20 the off-note
-  activations sit near 1.0 (the note templates explain the broadband noise), so no threshold separates notes from
-  silence and the best $F_1$ comes from a low $\theta$ that keeps every note.
+- [x] The selected $\theta$ is not monotone in noise (0.40, 0.55, 0.35). Why does it drop at 0.20? — At σ = 0.20 the
+  off-note activations sit near 1.0 (the note templates explain the broadband noise). The validation curve has two
+  peaks: a low $\theta$ that keeps every note, and one above the floor (θ ≈ 1.05) that the guide's grid (≤ 0.95) does
+  not reach. With a wider grid the selected θ is 1.05 and baseline $F_1$ rises 0.545 → 0.586 (`results/final_wide`).
+- [ ] Which threshold grid is primary in the report: the guide's (0.05–0.95, main configs) or the wide one (to 3.0)?
+  Currently the guide's grid is primary and the wide runs are sensitivity checks. Switching would change the
+  baseline's own σ = 0.20 result and `test_baseline_config_values`.
 
 ## 11. Results summary
 
@@ -307,38 +333,91 @@ Baseline only so far (`configs/baseline.json`, 30 test clips per setting, mean a
 | 0.10      | 0.55     | 0.933 [0.925, 0.941] | 0.00579  | 0.46 [0.39, 0.54]           | 0             |
 | 0.20      | 0.35     | 0.545 [0.536, 0.554] | 0.01233  | 2.69 [2.67, 2.71]           | 0             |
 
-**Final comparison** (2026-11-28). Full tables, stress cases, the threshold-range sensitivity check and the
-interpretation are in [`report_notes.md`](report_notes.md), Section 5. Summary:
+**Final comparison** (`configs/final.json`, 2026-11-28; `results/final/`). Paired differences method − baseline,
+mean [95% interval] over 30 test clips per noise level (`paired.csv`):
 
-- **Primary metric:** the penalty never improves $F_1$. $\Delta F_1$ = −0.0040 [−0.0049, −0.0032] at σ = 0.05,
-  −0.0040 [−0.0059, −0.0021] at 0.10, −0.0000 [−0.0005, +0.0005] at 0.20 (30 paired clips each, `results/final/paired.csv`).
-  Validation picks the smallest $\mu$ (0.3) everywhere.
-- **Onset smearing:** +0.16 and +0.25 frames at σ = 0.05 and 0.10 (predicted harm confirmed).
-- **Ablation:** `smooth_mu0` identical to the baseline.
-- **Control:** the running median helps at σ = 0.10 (+0.0047 [+0.0034, +0.0060]); the moving average behaves like the
-  penalty.
-- **Stress:** short notes double the penalty's cost at σ = 0.05 / 0.10; changed timbre: no recovery. The short-note
-  σ = 0.20 "win" (+0.11) is a threshold-grid artefact and reverses to −0.05 with a wider grid.
-- **Runtime:** +1–3 ms per clip (3–8%); ≈ 1 ms differences are within timing noise.
-- **Least convincing result / known limitations:** baseline $F_1$ falls to 0.545 at noise 0.20, so that setting
-  has the most room for the modification but also the most train/test noise mismatch (dictionary learned at 0.005).
+| σ    | Method           | Selected     | $\Delta F_1$                 | $\Delta$ mean \|onset lag\| (frames) |
+|------|------------------|--------------|------------------------------|--------------------------------------|
+| 0.05 | `smooth`         | $\mu$ = 0.3  | −0.0040 [−0.0049, −0.0032]   | +0.16 [+0.12, +0.19]                 |
+| 0.10 | `smooth`         | $\mu$ = 0.3  | −0.0040 [−0.0059, −0.0021]   | +0.25 [+0.19, +0.31]                 |
+| 0.20 | `smooth`         | $\mu$ = 0.3  | −0.0000 [−0.0005, +0.0005]   | +0.04 [−0.00, +0.08]                 |
+| 0.05 | `posthoc_mean`   | $w$ = 3      | −0.0032 [−0.0059, −0.0005]   | +0.21 [+0.16, +0.25]                 |
+| 0.10 | `posthoc_mean`   | $w$ = 3      | −0.0039 [−0.0060, −0.0019]   | +0.26 [+0.19, +0.32]                 |
+| 0.20 | `posthoc_mean`   | $w$ = 3      | −0.0010 [−0.0015, −0.0005]   | +0.19 [+0.14, +0.25]                 |
+| 0.05 | `posthoc_median` | $w$ = 3      | 0.0000 [0.0000, 0.0000]      | 0.00 [0.00, 0.00]                    |
+| 0.10 | `posthoc_median` | $w$ = 5      | +0.0047 [+0.0034, +0.0060]   | −0.02 [−0.04, +0.01]                 |
+| 0.20 | `posthoc_median` | $w$ = 3      | +0.0001 [−0.0001, +0.0002]   | 0.00 [0.00, 0.00]                    |
+
+- **Primary metric:** the penalty never improves $F_1$: slightly but clearly worse at σ = 0.05 and 0.10,
+  indistinguishable at 0.20. Validation $F_1$ falls steadily with $\mu$ at every level (σ = 0.10: 0.931 at
+  $\mu$ = 0.3, about 0.82 at $\mu$ = 100), so the selected $\mu$ is the grid's lower edge.
+- **Reconstruction loss:** $D/(FT)$ rises by 2–4 × 10⁻⁶ per entry, as expected.
+- **Onset smearing:** up at σ = 0.05 and 0.10, as predicted; no onsets missed.
+- **Ablation:** `smooth_mu0` is identical to the baseline at every level (all quality differences 0).
+- **Control:** the moving average behaves like the penalty; the running median is the only method that helps
+  (σ = 0.10). Smoothing as such is not the problem; quadratic smoothing, which spreads every jump, is.
+- **Why the penalty does not help** (validation clips only, Section 9): at σ = 0.05 errors sit at note boundaries; at
+  σ = 0.10 predictions fragment (156 on/off changes vs 120 true), which the median repairs; at σ = 0.20 (θ = 0.35)
+  the errors are a raised activation floor in silence, which a smoothness penalty cannot lower.
+
+**Stress cases** (`results/stress_short/`, `results/stress_timbre/`), $\Delta F_1$ to the baseline:
+
+| Case           | σ    | Baseline $F_1$ | `smooth`                   | `posthoc_mean`             | `posthoc_median`           |
+|----------------|------|----------------|----------------------------|----------------------------|----------------------------|
+| short notes    | 0.05 | 0.963          | −0.0038 [−0.0061, −0.0016] | −0.0116 [−0.0150, −0.0082] | 0.0000 [0.0000, 0.0000]    |
+| short notes    | 0.10 | 0.945          | −0.0086 [−0.0121, −0.0050] | −0.0125 [−0.0169, −0.0080] | 0.0000 [0.0000, 0.0000]    |
+| short notes    | 0.20 | 0.291 (θ = 0.95, grid edge) | +0.1075 [+0.0953, +0.1197] | −0.0299 [−0.0329, −0.0268] | −0.0103 [−0.0116, −0.0089] |
+| changed timbre | 0.05 | 0.973          | −0.0027 [−0.0041, −0.0014] | −0.0057 [−0.0073, −0.0040] | +0.0004 [−0.0001, +0.0008] |
+| changed timbre | 0.10 | 0.759          | −0.0012 [−0.0039, +0.0015] | −0.0017 [−0.0046, +0.0012] | +0.0038 [+0.0023, +0.0053] |
+| changed timbre | 0.20 | 0.545          | −0.0001 [−0.0004, +0.0003] | −0.0007 [−0.0012, −0.0002] | +0.0001 [−0.0001, +0.0002] |
+
+Short notes double the penalty's cost at σ = 0.05 / 0.10 (predicted harm); the changed timbre lowers the baseline
+sharply at σ = 0.10 and the penalty recovers none of it.
+
+**Threshold-range sensitivity** (`results/*_wide/`, θ up to 3.0; σ = 0.05 / 0.10 unchanged everywhere), σ = 0.20:
+
+| Run                     | Baseline $F_1$ (θ) | `smooth`                   | `posthoc_mean`             | `posthoc_median`           |
+|-------------------------|--------------------|----------------------------|----------------------------|----------------------------|
+| main                    | 0.586 (1.05)       | +0.0007 [−0.0035, +0.0048] | +0.0128 [+0.0093, +0.0163] | +0.0205 [+0.0169, +0.0240] |
+| short notes             | 0.692 (1.10)       | −0.0505 [−0.0660, −0.0350] | +0.0104 [−0.0038, +0.0246] | +0.0641 [+0.0495, +0.0788] |
+| changed timbre          | 0.545 (0.25)       | −0.0001 [−0.0004, +0.0003] | −0.0007 [−0.0012, −0.0002] | +0.0001 [−0.0001, +0.0002] |
+
+The short-note "win" for the penalty (+0.11) was an artefact of the baseline being stuck at the grid edge; with a
+wider grid it reverses to −0.05. With θ above the activation floor, both post-hoc filters help at σ = 0.20 while the
+penalty stays neutral.
+
+**Runtime** (`results/final/cases.csv`, median of 5 timed runs after a warm-up, one BLAS thread, Apple M4): baseline
+≈ 33–34 ms per clip; `smooth` +2.5 [+1.0, +4.1], +0.9 [−0.3, +2.1], +1.6 [+0.6, +2.7] ms at σ = 0.05 / 0.10 / 0.20;
+post-hoc filtering under 1 ms. Dictionary setup ≈ 19–24 s, shared.
+
+- **Least convincing result / known limitations:**
+    - The only gains come from the running-median control, which was not in the hypothesis and searched 95 settings
+      against the baseline's 19: a lead, not a demonstrated improvement.
+    - The guide's threshold grid is too narrow at σ = 0.20; every σ = 0.20 comparison should be read with its
+      wide-grid check, which was added after test results were seen.
+    - The selected $\mu$ sits on the grid's lower edge; a finer grid towards 0 can only approach the baseline.
+    - $\mu \ge 100$ is not fully converged within 200 iterations.
+    - Synthetic data only (three pitches, stationary white noise); the dictionary learned at σ = 0.005 is mismatched
+      at σ = 0.20 by design.
 
 ## 12. Pre-submission checklist
 
-- [ ] README works from a clean clone: install, smoke run, tests, final run — commands verified in the working
-  environment, not yet from a fresh clone
+- [ ] README works from a clean clone: install, smoke run, tests, final run — fresh clone of `872a139` (local, existing
+  environment): quick tests, smoke run and figures OK on 2026-11-28; a clone from GitHub with a fresh `pip install`
+  is still to do, on the submitted tag
 - [ ] Report claims match saved results
-- [ ] No test labels used in alignment, scaling or tuning — enforced for the baseline by
-  `test_uses_only_development_clips`, `test_no_development_seeds_and_noise_level_used` and
-  `test_threshold_independent_of_test_clips`; recheck for the modification
+- [x] No test labels used in alignment, scaling or tuning — baseline: `test_uses_only_development_clips`,
+  `test_no_development_seeds_and_noise_level_used`, `test_threshold_independent_of_test_clips`; modification and
+  control: `test_mu_and_threshold_independent_of_test_clips`, `test_only_val_and_test_seeds_used`,
+  `test_clip_kwargs_reach_each_split`
 - [ ] Seeds, versions, hardware recorded in `results/environment.json` — recorded in `run_info.json`
   (`config`, `environment`) instead; `platform.processor()` reports only `arm`, so state the CPU in the report
-- [ ] No paper PDFs, `.venv`, or secrets committed — none tracked as of `e77deb9`, but `docs/baseline_guide.pdf`,
-  `.DS_Store` and `__pycache__/` are untracked and not in `.gitignore`
+- [x] No paper PDFs, `.venv`, or secrets committed — none tracked as of `872a139`; `.venv`, `docs/baseline_guide.pdf`,
+  `.DS_Store` and `__pycache__/` are in `.gitignore`
 - [ ] Teaching team has repository access
 - [ ] Tag `v1.0-submission` created; full hash recorded in README, report and Section 1
 - [ ] Assistance and attribution declaration written
-- [ ] Interview backup (saved figures or screenshots) ready
+- [ ] Interview backup (saved figures or screenshots) ready — committed figures under `results/*/figures/` can serve
 
 ## 13. Attribution and assistance
 
@@ -349,7 +428,7 @@ interpretation are in [`report_notes.md`](report_notes.md), Section 5. Summary:
     - D. D. Lee and H. S. Seung (2001), "Algorithms for non-negative matrix factorization", NIPS 13 —
       multiplicative KL updates.
     - `scipy.signal.stft` (spectrograms), `scipy.optimize.linear_sum_assignment` (Hungarian matching).
-- **Collaboration:** _TODO_
+- **Collaboration:** _TODO — none, if that is the case_
 - **AI assistance:** Claude Code
     - `progress.md` progress skeleton
     - Docstring generation
@@ -361,4 +440,5 @@ interpretation are in [`report_notes.md`](report_notes.md), Section 5. Summary:
     - Modification milestone (2026-11-28): `src/modified.py` and `tests/test_modified.py`; the protocol and runner
       extensions (`mu_grid`, `window_grid`, `clip_kwargs`, `paired.csv`); `src/postprocess.py`; the stress options in
       `src/data.py`; `configs/final.json` and the stress configs; the paired, validation and per-method example
-      figures in `make_figures.py`; the related tests; `docs/report_notes.md`
+      figures in `make_figures.py`; the related tests; this log's Section 4 hypothesis wording and Section 11
+      summary; drafting notes for the report (kept outside the repository)

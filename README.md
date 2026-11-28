@@ -15,8 +15,9 @@ compared with the baseline, a $\mu = 0$ ablation, and two post-hoc smoothing con
 median, `src/postprocess.py`), on three noise levels and two stress cases.
 
 **Status:** baseline complete and tagged (`v0.1-baseline`); modification, control, stress cases and figures
-implemented. Main finding: the penalty does not improve frame $F_1$ on the main settings; see
-[`docs/report_notes.md`](docs/report_notes.md) for the hypothesis, results and interpretation.
+implemented. Main finding: the penalty does not improve frame $F_1$ in any setting tested (see
+[Modification results](#modification-results)); the hypothesis, decisions and full results are recorded in
+[`docs/progress.md`](docs/progress.md).
 
 ## Installation
 
@@ -109,7 +110,11 @@ dictionary takes about 19 s of the baseline run.
 
 ### Outputs
 
-Each run writes to the `output_dir` set in its config (`results/<name>/`, ignored by git):
+Each run writes to the `output_dir` set in its config (`results/<name>/`, created if needed). The submitted
+comparison runs (`final`, `stress_short`, `stress_timbre` and their `_wide` copies) are kept in the repository without
+their `example_clip.npz`; other output folders and the `.npz` files are ignored by git. Rerunning a config overwrites its
+folder: quality values reproduce exactly, runtimes vary by machine and load. `make_figures.py` needs the `.npz`, so
+rerun the config before redrawing its figures.
 
 | File                | Contents                                                                                       |
 |---------------------|------------------------------------------------------------------------------------------------|
@@ -157,6 +162,27 @@ The protocol choices behind these numbers are recorded with their evidence in
 - **Shared dictionary:** one dictionary is learned at the development noise and reused at every level, so
   comparisons isolate activation inference.
 
+## Modification results
+
+From `configs/final.json` (`results/final/paired.csv`): paired difference method − baseline in frame $F_1$, mean
+and 95% interval over 30 test clips per noise level.
+
+| Noise std | Baseline $F_1$ | Smoothness penalty     | Post-hoc running median | Ablation ($\mu=0$) |
+|-----------|----------------|------------------------|-------------------------|--------------------|
+| 0.05      | 0.988          | −0.0040 [−0.0049, −0.0032] | 0.0000 [0.0000, 0.0000]   | 0 (identical)      |
+| 0.10      | 0.933          | −0.0040 [−0.0059, −0.0021] | +0.0047 [+0.0034, +0.0060] | 0 (identical)      |
+| 0.20      | 0.545          | −0.0000 [−0.0005, +0.0005] | +0.0001 [−0.0001, +0.0002] | 0 (identical)      |
+
+- The penalty never improves $F_1$, smears onsets (+0.16 and +0.25 frames at σ = 0.05 and 0.10) and adds about
+  1–3 ms per clip. Validation selects the smallest $\mu$ in the grid at every level.
+- Short notes double its cost; a changed harmonic profile is not recovered (`results/stress_*`).
+- At σ = 0.20 the best threshold can lie above the standard grid's 0.95. With a grid to 3.0 (`results/*_wide`) the
+  baseline reaches 0.586, the penalty stays neutral (+0.0007 [−0.0035, +0.0048]) and the running median gains
+  +0.021. On short notes, an apparent +0.11 gain for the penalty with the standard grid reverses to −0.05.
+
+Figures: `results/final/figures/fig_paired.png` (overall comparison), `fig_validation.png` ($\mu$ and window
+curves), `fig_example_methods.png` (one clip, every method); `results/stress_short*/figures/` (stress case).
+
 ## Data
 
 `src/data.py` synthesizes 6 s clips at 8 kHz containing three harmonic tones (A3, C♯4, E4), each with six
@@ -182,9 +208,8 @@ Noise is drawn independently of the notes, so the same seed gives the same notes
 │   ├── stats.py         mean with Student-t interval
 │   └── timing.py        warm-up + repeated timing
 ├── tests/               pytest suite (see tests/README.md)
-└── docs/
-    ├── progress.md      decisions, problems and progress log
-    └── report_notes.md  hypothesis, results and interpretation, drafted for the report
+├── results/             submitted comparison runs: CSV tables, run_info.json, figures/
+└── docs/progress.md     decisions, problems and progress log
 ```
 
 ## Scope
@@ -211,5 +236,5 @@ Noise is drawn independently of the notes, so the same seed gives the same notes
 - AI assistance (Claude Code) was used for the test suite, docstrings, `reference_templates`, `select_threshold`,
   fixes in `metrics.py` and `timing.py`, `run_experiments.py`, this README, and in the modification milestone for
   `src/modified.py`, `src/postprocess.py`, the protocol and runner extensions, the stress options in `src/data.py`,
-  the new figures in `make_figures.py` and `docs/report_notes.md`. Details are in
+  the new figures in `make_figures.py`, and drafting notes for the report. Details are in
   [`docs/progress.md`](docs/progress.md), Section 13.
