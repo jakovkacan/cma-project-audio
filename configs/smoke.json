@@ -17,7 +17,7 @@
   "dev_noise_std": 0.005,
   "noise_levels": [
     0.05,
-    0.20
+    0.2
   ],
   "n_components": 3,
   "restart_seeds": [
@@ -38,5 +38,18 @@
     "warmup": 1,
     "repeats": 3
   },
+  "methods": [
+    {
+      "label": "baseline"
+    },
+    {
+      "label": "smooth",
+      "mu_grid": [
+        1.0,
+        10.0,
+        100.0
+      ]
+    }
+  ],
   "output_dir": "results/smoke"
 }

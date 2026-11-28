@@ -1,14 +1,25 @@
-"""Run the baseline protocol from a JSON configuration (Project Guide A1, Section 6.5).
+"""Run the baseline and modified protocols from a JSON configuration.
 
 Usage, from the repository root::
 
     python run_experiments.py --config configs/smoke.json      # seconds
-    python run_experiments.py --config configs/baseline.json   # about 1-2 min
+    python run_experiments.py --config configs/baseline.json   # baseline only
+    python run_experiments.py --config configs/final.json      # baseline vs modified
 
 The dictionary is learned once on development clips at the default noise level
 (:func:`src.protocol.learn_dictionary`) and reused at every noise level in
-``config["noise_levels"]``; the threshold is re-selected per level on validation
-clips (:func:`src.protocol.evaluate_setting`). Test labels enter only at scoring.
+``config["noise_levels"]`` and for every method. Per level and method, the
+threshold (and, for the modified method, the penalty weight ``mu``) is selected
+on validation clips (:func:`src.protocol.evaluate_setting`). Test labels enter
+only at scoring.
+
+Methods
+-------
+``config["methods"]`` is an optional list of ``{"label": str}`` entries, each
+with an optional ``"mu_grid"``. An entry without ``"mu_grid"`` runs baseline
+inference; an entry with one runs smoothed inference with ``mu`` selected from
+that grid (``[0.0]`` is the ablation: modified code path, penalty off). Without
+``"methods"`` the run is baseline only, labelled ``"baseline"``.
 
 Outputs, written into ``config["output_dir"]`` (created if needed)
 ------------------------------------------------------------------
@@ -18,13 +29,25 @@ Outputs, written into ``config["output_dir"]`` (created if needed)
 ``summary.csv``      one row per (noise level, method, metric) with the mean
                      and 95% t-interval over clips (Eq. 16): ``mean, low, high,
                      sd, n``.
-``run_info.json``    full configuration, selected thresholds, best restart
+``paired.csv``       only if a method labelled ``"baseline"`` and at least one
+                     other method ran: one row per (noise level, method,
+                     metric) with the mean paired difference ``method -
+                     baseline`` over test clips and its 95% t-interval:
+                     ``noise_std, method, reference, metric, mean_diff, low,
+                     high, sd, n``. ``runtime_s`` is included as a metric.
+                     Pairs where either value is NaN are dropped.
+``run_info.json``    full configuration, selected thresholds and ``mu``,
+                     validation curves, best restart
                      seed, matched similarities, scales, setup time, software
                      versions, platform and BLAS thread settings.
 ``example_clip.npz`` one fixed validation clip: ``V``, ``Y``, ``H_scaled``,
                      ``theta``, ``times``, ``freq``, plus the aligned ``W``,
                      the reference templates ``R`` and the ``matched``
                      similarities, so ``make_figures.py`` needs no recomputation.
+                     ``H_scaled`` and ``theta`` belong to the reference method
+                     (``"baseline"`` if present, else the first method); every
+                     other method adds ``H_scaled__<label>``,
+                     ``theta__<label>`` and ``mu__<label>``.
 """
 import os
 
@@ -43,18 +66,18 @@ import numpy as np
 import scipy
 
 from src.alignment import reference_templates
-from src.baseline import infer_activations
 from src.data import concat_clips, make_clip, split_seeds
-from src.protocol import evaluate_setting, learn_dictionary
+from src.protocol import infer_method, evaluate_setting, learn_dictionary
 from src.stats import mean_ci
 
 CASE_COLUMNS = ["case_id", "split", "seed", "noise_std", "method", "metric", "value", "runtime_s"]
 SUMMARY_COLUMNS = ["noise_std", "method", "metric", "mean", "low", "high", "sd", "n"]
-METHOD = "baseline"
+PAIRED_COLUMNS = ["noise_std", "method", "reference", "metric", "mean_diff", "low", "high", "sd", "n"]
+REFERENCE = "baseline"
 
 
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser(description="Run the KL-NMF baseline protocol.")
+    parser = argparse.ArgumentParser(description="Run the KL-NMF baseline and modified protocols.")
     parser.add_argument("--config", required=True, type=Path,
                         help="path to a JSON configuration, e.g. configs/smoke.json")
     args = parser.parse_args(argv)
@@ -67,6 +90,33 @@ def load_config(path):
     """Read a JSON configuration file into a dict."""
     with open(path) as f:
         return json.load(f)
+
+
+def parse_methods(config):
+    """Read ``config["methods"]`` into a list of ``{"label", "mu_grid"}`` dicts.
+
+    ``mu_grid`` is ``None`` for baseline inference. Without ``"methods"`` the
+    result is ``[{"label": "baseline", "mu_grid": None}]``.
+
+    Raises
+    ------
+    ValueError
+        If the list is empty, an entry has no label, or labels repeat.
+    """
+    entries = config.get("methods", [{"label": REFERENCE}])
+    if not entries:
+        raise ValueError("config['methods'] must not be empty.")
+    methods = []
+    for entry in entries:
+        if "label" not in entry:
+            raise ValueError(f"method entry without a label: {entry}")
+        grid = entry.get("mu_grid")
+        methods.append({"label": str(entry["label"]),
+                        "mu_grid": None if grid is None else [float(m) for m in grid]})
+    labels = [m["label"] for m in methods]
+    if len(set(labels)) != len(labels):
+        raise ValueError(f"method labels must be unique: {labels}")
+    return methods
 
 
 def to_jsonable(obj):
@@ -120,6 +170,55 @@ def summarize(records):
     return rows
 
 
+def paired_differences(records, reference=REFERENCE):
+    """Per-clip paired differences ``method - reference``, summarized per setting.
+
+    Cases are paired by (noise level, test seed). Each metric and the runtime
+    are compared; a pair is dropped if either value is NaN (e.g. a mean onset
+    lag when every onset is missed), so ``n`` can be below the clip count.
+    The interval is the Student-t 95% interval of :func:`src.stats.mean_ci`
+    over the per-clip differences; the clip is the unit of analysis.
+
+    Returns
+    -------
+    list of dict
+        Rows with keys ``PAIRED_COLUMNS``; empty if ``reference`` is absent or
+        is the only method.
+    """
+    values = {}
+    for r in records:
+        values[(r["noise_std"], r["method"], r["metric"], r["seed"])] = r["value"]
+        values[(r["noise_std"], r["method"], "runtime_s", r["seed"])] = r["runtime_s"]
+
+    methods = sorted({r["method"] for r in records} - {reference})
+    if reference not in {r["method"] for r in records}:
+        return []
+    keys = sorted({(k[0], k[2]) for k in values})  # (noise_std, metric)
+    rows = []
+    for method in methods:
+        for noise_std, metric in keys:
+            seeds = sorted({k[3] for k in values if k[:3] == (noise_std, method, metric)})
+            diffs = [values[(noise_std, method, metric, s)] - values[(noise_std, reference, metric, s)]
+                     for s in seeds if (noise_std, reference, metric, s) in values]
+            diffs = np.asarray([d for d in diffs if np.isfinite(d)], dtype=float)
+            if diffs.size == 0:
+                ci = {"mean": np.nan, "low": np.nan, "high": np.nan, "sd": np.nan, "n": 0}
+            else:
+                ci = mean_ci(diffs)
+            rows.append({
+                "noise_std": noise_std,
+                "method": method,
+                "reference": reference,
+                "metric": metric,
+                "mean_diff": float(ci["mean"]),
+                "low": float(ci["low"]),
+                "high": float(ci["high"]),
+                "sd": float(ci["sd"]),
+                "n": int(ci["n"]),
+            })
+    return rows
+
+
 def dev_reference_templates(config):
     """Reference templates r_k (Eq. 10) from development clips only, for the figures."""
     dev_seeds = split_seeds(config["seeds"])["dev"]
@@ -127,28 +226,41 @@ def dev_reference_templates(config):
     return reference_templates(dev["V"], dev["Y"])["R"]
 
 
-def save_example_clip(path, dictionary, R, config, thresholds):
+def save_example_clip(path, dictionary, R, config, results, methods):
     """Save one fixed validation clip with everything needed to redraw its figure.
 
     The clip is the first validation seed at the first configured noise level,
     inferred exactly as in :func:`src.protocol.evaluate_setting` (clip seed,
-    ``n_iter_infer`` iterations, frozen ``W``) and scaled by ``c_k``.
+    ``n_iter_infer`` iterations, frozen ``W``, the selected ``mu``) and scaled
+    by ``c_k``. ``results[(noise_std, label)]`` holds each method's selected
+    ``"threshold"`` and ``"mu"``.
     """
     seed = split_seeds(config["seeds"])["val"][0]
     noise_std = float(config["noise_levels"][0])
     clip = make_clip(seed, noise_std=noise_std)
     W = np.asarray(dictionary["W"])
-    H = infer_activations(clip["V"], W, n_iter=config["n_iter_infer"], seed=seed,
-                          eps=config["eps"], track_loss=False)["H"]
-    H_scaled = H / np.asarray(dictionary["scales"])[:, None]
+    scales = np.asarray(dictionary["scales"])[:, None]
+
+    labels = [m["label"] for m in methods]
+    ref = REFERENCE if REFERENCE in labels else labels[0]
+    arrays = {}
+    for label in labels:
+        res = results[(noise_std, label)]
+        H_scaled = infer_method(clip["V"], W, config, seed, res["mu"]) / scales
+        if label == ref:
+            arrays.update(H_scaled=H_scaled, theta=res["threshold"])
+        else:
+            arrays[f"H_scaled__{label}"] = H_scaled
+            arrays[f"theta__{label}"] = res["threshold"]
+            arrays[f"mu__{label}"] = np.nan if res["mu"] is None else res["mu"]
+
     np.savez_compressed(
         path,
-        V=clip["V"], Y=clip["Y"], H_scaled=H_scaled, theta=thresholds[noise_std],
-        times=clip["times"], freq=clip["freq"],
+        V=clip["V"], Y=clip["Y"], times=clip["times"], freq=clip["freq"],
         W=W, R=R, matched=np.asarray(dictionary["match"]["matched"], dtype=float),
-        seed=seed, noise_std=noise_std,
+        seed=seed, noise_std=noise_std, reference_method=ref, **arrays,
     )
-    return {"seed": seed, "noise_std": noise_std}
+    return {"seed": seed, "noise_std": noise_std, "reference_method": ref}
 
 
 def environment_info():
@@ -175,29 +287,39 @@ def main(argv=None):
           f"matched similarities {np.round(dictionary['match']['matched'], 4)}, "
           f"setup {dictionary['setup_seconds']:.1f} s", flush=True)
 
-    records, thresholds, validation = [], {}, {}
+    methods = parse_methods(config)
+    records, results = [], {}
     for noise_std in config["noise_levels"]:
         noise_std = float(noise_std)
-        result = evaluate_setting(dictionary, noise_std, config, method=METHOD)
-        records.extend(result["records"])
-        thresholds[noise_std] = float(result["threshold"])
-        validation[noise_std] = {"grid": result["grid"], "mean_f1": result["val_mean_f1"]}
-        f1 = [r["value"] for r in result["records"] if r["metric"] == "f1"]
-        print(f"  noise {noise_std:g}: theta {thresholds[noise_std]:.2f}, "
-              f"test F1 mean {np.mean(f1):.3f}", flush=True)
+        for m in methods:
+            result = evaluate_setting(dictionary, noise_std, config, method=m["label"],
+                                      mu_grid=m["mu_grid"])
+            records.extend(result["records"])
+            results[(noise_std, m["label"])] = result
+            f1 = [r["value"] for r in result["records"] if r["metric"] == "f1"]
+            mu = "" if result["mu"] is None else f", mu {result['mu']:g}"
+            print(f"  noise {noise_std:g} [{m['label']}]: theta {result['threshold']:.2f}{mu}, "
+                  f"test F1 mean {np.mean(f1):.3f}", flush=True)
 
     write_csv(out_dir / "cases.csv", records, CASE_COLUMNS)
     write_csv(out_dir / "summary.csv", summarize(records), SUMMARY_COLUMNS)
+    paired = paired_differences(records)
+    if paired:
+        write_csv(out_dir / "paired.csv", paired, PAIRED_COLUMNS)
 
     R = dev_reference_templates(config)
-    example = save_example_clip(out_dir / "example_clip.npz", dictionary, R, config, thresholds)
+    example = save_example_clip(out_dir / "example_clip.npz", dictionary, R, config, results, methods)
 
     run_info = {
         "config_path": args.config,
         "config": config,
-        "method": METHOD,
-        "thresholds": [{"noise_std": k, "threshold": v} for k, v in thresholds.items()],
-        "validation": [{"noise_std": k, **v} for k, v in validation.items()],
+        "methods": methods,
+        "thresholds": [{"noise_std": k[0], "method": k[1], "threshold": v["threshold"], "mu": v["mu"]}
+                       for k, v in results.items()],
+        "validation": [{"noise_std": k[0], "method": k[1], "grid": v["grid"],
+                        "mean_f1": v["val_mean_f1"], "mu_grid": v["mu_grid"],
+                        "mean_f1_by_mu": v["val_mean_f1_by_mu"]}
+                       for k, v in results.items()],
         "best_seed": dictionary["best_seed"],
         "final_losses": dictionary["final_losses"],
         "match": dictionary["match"],

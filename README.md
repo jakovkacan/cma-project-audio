@@ -9,8 +9,9 @@ their activations over time. A dictionary is learned on development clips, align
 infer activations on held-out clips, which are thresholded into note predictions and scored against the
 ground-truth note activity.
 
-**Status:** the baseline is complete and tested. The temporal-smoothness modification (`src/modified.py`,
-`configs/final.json`) is not yet implemented.
+**Status:** the baseline is complete and tested (tag `v0.1-baseline`). The temporal-smoothness modification
+(`src/modified.py`) and the baseline-vs-modified protocol (`configs/final.json`) are implemented; figures for the
+paired comparison, the post-hoc smoothing control and the stress cases are still to come.
 
 ## Installation
 
@@ -29,7 +30,7 @@ python -m pip install -r requirements.txt
 All commands run from the repository root.
 
 ```bash
-python -m pytest                                       # checks, ~40 s
+python -m pytest                                       # checks, ~50 s
 python run_experiments.py --config configs/smoke.json  # smoke run, ~3 s
 python make_figures.py --results results/smoke         # figures, ~1 s
 ```
@@ -37,7 +38,7 @@ python make_figures.py --results results/smoke         # figures, ~1 s
 ## Checks
 
 ```bash
-python -m pytest                    # full suite, ~40 s (203 passed, 1 skipped)
+python -m pytest                    # full suite, ~50 s (274 passed, 1 skipped)
 python -m pytest -m "not slow"      # quick loop
 python -m pytest tests/test_baseline.py
 python -m pytest -rs                # list skipped tests and why
@@ -53,10 +54,16 @@ the hand-computed update examples, monotonicity checks and data-leakage checks o
 |-------------------------|------------------------|-------------------|----------|----------|
 | `configs/smoke.json`    | 3 / 3 / 5              | 0.05, 0.20        | 2        | ~3 s     |
 | `configs/baseline.json` | 10 / 10 / 30           | 0.05, 0.10, 0.20  | 4        | ~40 s    |
+| `configs/final.json`    | 10 / 10 / 30           | 0.05, 0.10, 0.20  | 4        | ~90 s    |
+
+`smoke.json` runs `baseline` and `smooth`; `baseline.json` runs the baseline only; `final.json` runs `baseline`,
+`smooth` and the ablation `smooth_mu0`. The methods come from the config's optional `methods` list: an entry without
+`mu_grid` runs baseline inference, an entry with one runs smoothed inference with $\mu$ selected from that grid.
 
 ```bash
 python run_experiments.py --config configs/baseline.json
 python make_figures.py --results results/baseline
+python run_experiments.py --config configs/final.json      # baseline vs modified
 ```
 
 Times are wall-clock on an Apple silicon laptop with BLAS pinned to one thread (`run_experiments.py` sets
@@ -70,8 +77,10 @@ dictionary takes about 19 s of the baseline run.
 2. **Alignment.** Build a reference template per pitch from frames where only that pitch sounds, match components
    to pitches by cosine similarity (Hungarian assignment), and fix per-pitch activation scales from development
    activations. Only development data is used.
-3. **Threshold.** For each noise level, infer activations on validation clips with $W$ frozen and choose the
-   threshold $\theta$ that maximizes mean per-clip $F_1$.
+3. **Threshold.** For each noise level and method, infer activations on validation clips with $W$ frozen and choose
+   the threshold $\theta$ that maximizes mean per-clip $F_1$. For the modified method, the penalty weight $\mu$ is
+   chosen at the same time: the best $\theta$ is found for each $\mu$ in `mu_grid`, and the $\mu$ with the highest
+   validation $F_1$ wins (ties go to the smallest $\mu$).
 4. **Test.** Infer activations on test clips and score them. Test labels are used only here.
 
 ### Outputs
@@ -82,7 +91,8 @@ Each run writes to the `output_dir` set in its config (`results/<name>/`, ignore
 |---------------------|------------------------------------------------------------------------------------------------|
 | `cases.csv`         | One row per (test clip, metric): `case_id, split, seed, noise_std, method, metric, value, runtime_s` |
 | `summary.csv`       | One row per (noise level, method, metric): mean, 95% Student-t interval over clips, sd, n      |
-| `run_info.json`     | Full config, selected thresholds, validation curves, best restart, match similarities, scales, setup time, software versions, platform, thread settings |
+| `paired.csv`        | Only when `baseline` and another method ran: per (noise level, method, metric, plus `runtime_s`), mean paired difference method − baseline over test clips with its 95% interval |
+| `run_info.json`     | Full config, methods, selected thresholds and $\mu$, validation curves (per $\mu$ for the modified method), best restart, match similarities, scales, setup time, software versions, platform, thread settings |
 | `example_clip.npz`  | One fixed validation clip with $V$, $Y$, scaled $H$, $\theta$, aligned $W$ and references $R$  |
 | `figures/fig_example.png`     | Spectrogram, true note activity and scaled activations with $\theta$                 |
 | `figures/fig_templates.png`   | Learned templates against the reference templates, one panel per pitch               |
@@ -133,10 +143,11 @@ Noise is drawn independently of the notes, so the same seed gives the same notes
 ```
 ├── run_experiments.py   config -> protocol -> CSV + JSON
 ├── make_figures.py      saved results -> PNG figures
-├── configs/             smoke.json, baseline.json
+├── configs/             smoke.json, baseline.json, final.json
 ├── src/
 │   ├── data.py          synthetic clips, seed splits, concatenation
 │   ├── baseline.py      KL divergence, multiplicative updates, fit with restarts, frozen inference
+│   ├── modified.py      temporal smoothness penalty, penalized H update, frozen inference
 │   ├── alignment.py     reference templates, component matching, activation scales
 │   ├── metrics.py       frame F1, KL per entry, onset lags, threshold selection
 │   ├── protocol.py      learn_dictionary, evaluate_setting

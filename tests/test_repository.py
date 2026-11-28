@@ -12,7 +12,7 @@ from conftest import REPO_ROOT
 
 REQUIRED = [
     "README.md", "requirements.txt", ".gitignore", "run_experiments.py", "make_figures.py",
-    "configs/smoke.json", "configs/baseline.json", "docs/progress.md",
+    "configs/smoke.json", "configs/baseline.json", "configs/final.json", "docs/progress.md",
     "src/__init__.py", "src/data.py", "src/baseline.py", "src/modified.py", "src/alignment.py", "src/metrics.py",
     "src/stats.py", "src/timing.py", "src/protocol.py",
 ]
@@ -90,7 +90,7 @@ def _config(name):
     return json.loads(path.read_text())
 
 
-@pytest.mark.parametrize("name", ["smoke.json", "baseline.json"])
+@pytest.mark.parametrize("name", ["smoke.json", "baseline.json", "final.json"])
 def test_config_has_all_keys(name):
     cfg = _config(name)
     assert CONFIG_KEYS <= set(cfg), f"{name} missing keys: {sorted(CONFIG_KEYS - set(cfg))}"
@@ -125,3 +125,22 @@ def test_baseline_config_values():
     assert cfg["output_dir"] == "results/baseline"
     n_test = len(range(*cfg["seeds"]["test"]))
     assert n_test >= 20, "the brief asks for at least 20 paired cases per setting"
+
+
+def test_smoke_config_shows_both_methods():
+    cfg = _config("smoke.json")
+    methods = cfg.get("methods", [])
+    assert any("mu_grid" not in m for m in methods), "smoke run needs the baseline"
+    assert any(m.get("mu_grid") for m in methods), "smoke run needs the modified method"
+
+
+def test_final_config_matches_baseline_protocol():
+    """The final comparison must reuse the baseline protocol unchanged; only methods differ."""
+    final, base = _config("final.json"), _config("baseline.json")
+    for key in CONFIG_KEYS - {"name", "output_dir"}:
+        assert final[key] == base[key], f"final.json changes '{key}' relative to baseline.json"
+    methods = {m["label"]: m for m in final["methods"]}
+    assert "baseline" in methods and "mu_grid" not in methods["baseline"]
+    grids = [m["mu_grid"] for m in final["methods"] if "mu_grid" in m]
+    assert any(min(g) > 0 for g in grids), "the modified method must always apply the penalty"
+    assert [0.0] in grids, "include the mu = 0 ablation"

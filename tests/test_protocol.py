@@ -147,3 +147,78 @@ class TestEvaluateSetting:
         protocol.evaluate_setting(tiny_dictionary, 0.05, tiny_config())
         np.testing.assert_array_equal(tiny_dictionary["W"], W0)
         np.testing.assert_array_equal(tiny_dictionary["scales"], s0)
+
+
+# ----------------------------------------------------------------------------
+# Modified method: evaluate_setting with a mu_grid (joint mu/theta selection)
+# ----------------------------------------------------------------------------
+MU_GRID = [10.0, 0.0, 1.0]   # deliberately unsorted
+
+
+@pytest.fixture(scope="module")
+def smooth_evaluation(protocol, tiny_dictionary):
+    return protocol.evaluate_setting(tiny_dictionary, 0.05, tiny_config(), method="smooth", mu_grid=MU_GRID)
+
+
+class TestEvaluateSmooth:
+    def test_baseline_reports_no_mu(self, protocol, tiny_dictionary):
+        out = protocol.evaluate_setting(tiny_dictionary, 0.05, tiny_config())
+        assert out["mu"] is None and out["mu_grid"] is None and out["val_mean_f1_by_mu"] is None
+
+    def test_contract(self, smooth_evaluation):
+        out = smooth_evaluation
+        records = out["records"]
+        n_test = len(range(*tiny_config()["seeds"]["test"]))
+        assert len(records) == n_test * len(CASE_METRICS)
+        assert {r["method"] for r in records} == {"smooth"}
+        assert all(r["case_id"].startswith("smooth_") for r in records)
+        np.testing.assert_array_equal(out["mu_grid"], sorted(MU_GRID))
+        assert out["mu"] in MU_GRID
+        assert out["val_mean_f1_by_mu"].shape == (len(MU_GRID), len(out["grid"]))
+
+    def test_selection_is_argmax_with_smallest_mu_on_ties(self, smooth_evaluation):
+        out = smooth_evaluation
+        best_per_mu = out["val_mean_f1_by_mu"].max(axis=1)
+        i = int(np.argmax(best_per_mu))
+        assert out["mu"] == out["mu_grid"][i]
+        np.testing.assert_array_equal(out["val_mean_f1"], out["val_mean_f1_by_mu"][i])
+        assert out["threshold"] == pytest.approx(out["grid"][int(np.argmax(out["val_mean_f1"]))])
+
+    def test_mu_zero_ablation_matches_baseline(self, protocol, tiny_dictionary, tiny_evaluation):
+        """mu_grid=[0] runs the modified code path with the penalty off: same theta and quality."""
+        out = protocol.evaluate_setting(tiny_dictionary, 0.05, tiny_config(), method="ablation", mu_grid=[0.0])
+        base_records, base_theta = tiny_evaluation
+        assert out["mu"] == 0.0
+        assert out["threshold"] == pytest.approx(base_theta)
+        key = lambda r: (int(r["seed"]), r["metric"])
+        base = {key(r): r["value"] for r in base_records}
+        for r in out["records"]:
+            b = base[key(r)]
+            assert (np.isnan(b) and np.isnan(r["value"])) or r["value"] == b
+
+    def test_mu_and_threshold_independent_of_test_clips(self, protocol, tiny_dictionary, smooth_evaluation):
+        cfg = tiny_config(); cfg["seeds"]["test"] = [2000, 2003]
+        other = protocol.evaluate_setting(tiny_dictionary, 0.05, cfg, method="smooth", mu_grid=MU_GRID)
+        assert other["mu"] == smooth_evaluation["mu"]
+        assert other["threshold"] == pytest.approx(smooth_evaluation["threshold"])
+        np.testing.assert_array_equal(other["val_mean_f1_by_mu"], smooth_evaluation["val_mean_f1_by_mu"])
+
+    def test_only_val_and_test_seeds_used(self, protocol, data, tiny_dictionary, monkeypatch):
+        rec = _record_make_clip(monkeypatch, data, protocol)
+        cfg = tiny_config()
+        protocol.evaluate_setting(tiny_dictionary, 0.05, cfg, method="smooth", mu_grid=MU_GRID)
+        used = {s for s, _ in rec.calls}
+        allowed = set(range(*cfg["seeds"]["val"])) | set(range(*cfg["seeds"]["test"]))
+        assert used <= allowed, f"unexpected seeds: {sorted(used - allowed)}"
+        assert all(n == pytest.approx(0.05) for _, n in rec.calls)
+
+    def test_dictionary_not_mutated(self, protocol, tiny_dictionary):
+        W0 = np.array(tiny_dictionary["W"], copy=True); s0 = np.array(tiny_dictionary["scales"], copy=True)
+        protocol.evaluate_setting(tiny_dictionary, 0.05, tiny_config(), method="smooth", mu_grid=[1.0])
+        np.testing.assert_array_equal(tiny_dictionary["W"], W0)
+        np.testing.assert_array_equal(tiny_dictionary["scales"], s0)
+
+    @pytest.mark.parametrize("bad", [[], [-1.0], [1.0, np.nan], [np.inf]])
+    def test_bad_mu_grid_raises(self, protocol, tiny_dictionary, bad):
+        with pytest.raises(ValueError):
+            protocol.evaluate_setting(tiny_dictionary, 0.05, tiny_config(), method="smooth", mu_grid=bad)

@@ -41,7 +41,7 @@ Fill in and freeze **before** looking at test results.
 |------------------------------------------------------|---------------------------------------------------------------------------------------------------------|------------|
 | Number of components $K$                             | 3                                                                                                       | 2026-11-24 |
 | STFT                                                 | Hann, `nperseg=512`, `noverlap=384` (hop 128), `fs=8000`, $F=257$                                       | 2026-11-13 |
-| Magnitude normalization                              | Baseline: none (raw magnitudes). Modification: _TODO — one constant from development data, or $\mu=\tilde\mu/\text{mean}(V)$_ |            |
+| Magnitude normalization                              | None for either method (raw magnitudes, raw $\mu$). $\mu$ is re-selected per noise level on validation clips, which absorbs the change in the scale of $H$ with noise (see decision log) | 2026-11-28 |
 | Initialization                                       | $W_0, H_0 \sim \mathcal{U}[0.5, 1.5)$ from `default_rng(seed)`; dictionary restart seeds 0–3; inference seed = clip seed, identical for both methods | 2026-11-14 |
 | Iterations (both methods)                            | 300 for dictionary learning, 200 for frozen inference                                                   | 2026-11-24 |
 | `eps` floor                                          | $10^{-10}$                                                                                              | 2026-11-14 |
@@ -50,8 +50,8 @@ Fill in and freeze **before** looking at test results.
 | Test seeds                                           | 1000–1029 (30 cases per setting)                                                                        | 2026-11-24 |
 | Difficulty settings                                  | Noise std 0.05 / 0.10 / 0.20 (easy / medium / hard); see decision log                                   | 2026-11-24 |
 | Threshold grid (both methods)                        | 0.05, 0.10, …, 0.95; re-selected per noise level on validation, ties to the smallest $\theta$           | 2026-11-24 |
-| $\mu$ grid (modified only)                           | _TODO_                                                                                                  |            |
-| Baseline extra search budget (to match $\mu$ tuning) | _TODO_                                                                                                  |            |
+| $\mu$ grid (modified only)                           | 0.3, 1, 3, 10, 30, 100; selected jointly with $\theta$ per noise level on validation, ties to the smallest $\mu$. $\mu=0$ is excluded (the method always smooths); it runs separately as the ablation `smooth_mu0`. Chosen from validation clip 100 only | 2026-11-28 |
+| Baseline extra search budget (to match $\mu$ tuning) | _TODO — modified searches 6 × 19 = 114 ($\mu$, $\theta$) pairs, baseline 19. Option: a 6× finer $\theta$ grid for the baseline. Less pressing now that the modified method does not win (see Section 11)_ |            |
 | Component-to-pitch matching                          | Cosine similarity to exclusive-frame reference templates + Hungarian assignment, development data only  | 2026-11-14 |
 | Scale fixing                                         | $c_k$ = 95th percentile of development activations over frames where pitch $k$ sounds                   | 2026-11-14 |
 | Uncertainty                                          | Mean with Student-t 95% interval over clips (`src/stats.py::mean_ci`); applied to paired differences once the modification exists | 2026-11-24 |
@@ -111,12 +111,13 @@ Full suite on 2026-11-24: 203 passed, 1 skipped (the optional `requirements-dev.
 
 ## 6. Experiment checklist
 
-- [ ] Smoke config runs in about a minute and shows both methods — runs in about 3 s, baseline only so far
-- [ ] Final config reproduces all tables and figures — `configs/baseline.json` reproduces the baseline tables and
-  figures (about 40 s); `configs/final.json` not written yet
-- [ ] Three difficulty settings, ≥ 20 paired clips each — three settings × 30 test clips for the baseline; pairing
-  with the modified method still to come
-- [ ] Ablation: $\mu=0$ with threshold re-selected
+- [x] Smoke config runs in about a minute and shows both methods — about 5 s, `baseline` and `smooth` ($\mu$ grid 1, 10, 100)
+- [ ] Final config reproduces all tables and figures — `configs/final.json` runs in about 90 s and writes
+  `cases.csv`, `summary.csv`, `paired.csv`, `run_info.json`, `example_clip.npz`; paired-comparison figure still to come
+- [x] Three difficulty settings, ≥ 20 paired clips each — three settings × 30 test clips, paired by seed;
+  differences in `paired.csv`
+- [x] Ablation: $\mu=0$ with threshold re-selected — `smooth_mu0` in `configs/final.json`; every quality difference
+  to the baseline is exactly 0 (checked by `test_ablation_differences_are_zero`)
 - [ ] Extra control: baseline plus post-hoc smoothing filter
 - [ ] Stress: shorter notes
 - [ ] Stress: changed harmonic profile
@@ -131,6 +132,23 @@ Full suite on 2026-11-24: 203 passed, 1 skipped (the optional `requirements-dev.
 ## 7. Decision log
 
 *Newest first. One entry per decision.*
+
+### 2026-11-28 — Joint $\mu$/$\theta$ selection on validation; ablation as a separate method
+
+- **Context:** the modified method has a second setting, $\mu$, whose effective strength depends on the scale of
+  $H$. That scale grows with noise (validation clip 100: mean $H$ ≈ 0.45 at σ = 0.05, ≈ 1.04 at σ = 0.20).
+- **Options considered:** (a) one fixed $\mu$ for all noise levels; (b) $\mu$ normalized by mean($V$);
+  (c) $\mu$ selected per noise level on validation clips, together with $\theta$.
+- **Decision:** (c), on the grid 0.3, 1, 3, 10, 30, 100. For each $\mu$ the best $\theta$ is found; the $\mu$ with
+  the highest validation mean $F_1$ wins, ties to the smallest. $\mu=0$ is not in the grid. It runs as its own method,
+  `smooth_mu0`, through the modified code path.
+- **Why:** (c) treats $\mu$ like $\theta$: a setting chosen from validation data per condition, so no scale constant has
+  to be fixed by hand. Leaving out $\mu=0$ keeps "smooth" a test of the penalty rather than a choice between
+  smoothing and none. The grid came from the convergence check on validation clip 100, before any test run.
+- **Consequences / follow-ups:** the modified method searches 114 ($\mu$, $\theta$) pairs against the baseline's 19
+  (see Section 3). `run_info.json["validation"]` stores the full ($\mu$, $\theta$) F1 table. Implemented in
+  `src/protocol.py::evaluate_setting(mu_grid=...)`, `run_experiments.py` (`methods`, `paired.csv`) and
+  `configs/final.json`.
 
 ### 2026-11-24 — One shared dictionary across noise levels
 
@@ -217,12 +235,29 @@ Full suite on 2026-11-24: 203 passed, 1 skipped (the optional `requirements-dev.
 - Tagged `v0.1-baseline` (annotated) on `3e68fd9`.
 - **Next:** start `modified.py`.
 
+### 2026-11-28
+
+- Implemented `src/modified.py` (smoothness-penalized H update, inference) and `tests/test_modified.py`.
+- Protocol: `evaluate_setting(..., mu_grid=...)` selects $\mu$ and $\theta$ on validation; `run_experiments.py` reads
+  a `methods` list and writes `paired.csv`; added `configs/final.json`; smoke config now runs both methods.
+- First full run of `configs/final.json`: validation picks the smallest $\mu$ (0.3) at every noise level, and
+  validation $F_1$ falls steadily as $\mu$ grows. See Section 11.
+- Validation-only error breakdown (baseline, seeds 100–109): at σ = 0.05 every error lies within 3 frames of a note
+  boundary; at σ = 0.20 almost every error is a false positive in silence (2972 of 3123 error frames), and
+  predictions change *less* often than the labels (80 vs 120 changes). The off-note 95th percentile of the scaled
+  activations is ≈ 1.0, which means a raised floor rather than frame-to-frame jitter. A smoothness penalty cannot lower
+  a floor.
+- **Next:** paired-comparison figure; post-hoc smoothing control; stress cases; write the hypothesis section honestly.
+
 ## 10. Open questions
 
-- [ ] Is the simple split-gradient $H$ update monotone, or is the exact quadratic form needed?
+- [x] Is the simple split-gradient $H$ update monotone, or is the exact quadratic form needed? — monotone in every
+  check so far (Section 4); the exact form is not needed.
 - [x] Which noise levels give a useful spread of baseline $F_1$? — 0.05 / 0.10 / 0.20 (see decision log).
 - [ ] The selected $\theta$ is not monotone in noise (0.40, 0.55, 0.35). Why does it drop at 0.20? Look at the
-  validation $F_1$ curves in `run_info.json["validation"]`.
+  validation $F_1$ curves in `run_info.json["validation"]`. — Likely lead (2026-11-28): at σ = 0.20 the off-note
+  activations sit near 1.0 (the note templates explain the broadband noise), so no threshold separates notes from
+  silence and the best $F_1$ comes from a low $\theta$ that keeps every note.
 
 ## 11. Results summary
 
@@ -236,12 +271,28 @@ Baseline only so far (`configs/baseline.json`, 30 test clips per setting, mean a
 | 0.10      | 0.55     | 0.933 [0.925, 0.941] | 0.00579  | 0.46 [0.39, 0.54]           | 0             |
 | 0.20      | 0.35     | 0.545 [0.536, 0.554] | 0.01233  | 2.69 [2.67, 2.71]           | 0             |
 
-- **Primary metric (mean paired difference, 95% CI) per setting:** _TODO — needs the modified method_
-- **Reconstruction loss $D/(FT)$:** baseline in the table above
-- **Onset smearing:** baseline in the table above; lag grows sharply at noise 0.20
-- **Runtime overhead:** baseline inference about 35 ms per clip (200 iterations, one BLAS thread); dictionary
-  setup about 19 s. Overhead of the modification _TODO_
-- **Ablation:** _TODO_
+**First full comparison** (`configs/final.json`, 2026-11-28; 30 paired test clips per setting; `smooth` − `baseline`,
+mean and 95% t-interval over clips, from `results/final/paired.csv`):
+
+| Noise std | Selected $\mu$ | $\Delta F_1$                   | $\Delta D/(FT)$            | $\Delta$ mean \|onset lag\| (frames) | $\Delta$ runtime (ms) |
+|-----------|----------------|--------------------------------|----------------------------|--------------------------------------|-----------------------|
+| 0.05      | 0.3            | −0.0040 [−0.0049, −0.0032]     | +2.0e−6 [+2.0e−6, +2.1e−6] | +0.16 [+0.12, +0.19]                 | +0.9 [−0.4, +2.2]     |
+| 0.10      | 0.3            | −0.0040 [−0.0059, −0.0021]     | +2.6e−6 [+2.5e−6, +2.6e−6] | +0.25 [+0.19, +0.31]                 | +3.1 [+0.2, +6.0]     |
+| 0.20      | 0.3            | −0.0000 [−0.0005, +0.0005]     | +4.1e−6 [+4.0e−6, +4.1e−6] | +0.04 [−0.00, +0.08]                 | +3.0 [+2.1, +3.9]     |
+
+- **Primary metric:** the penalty does not improve $F_1$ at any setting. It is slightly but clearly worse at
+  σ = 0.05 and 0.10, and indistinguishable at 0.20. Validation $F_1$ falls steadily with $\mu$ at every level
+  (e.g. σ = 0.10: 0.931 at $\mu$ = 0.3 down to 0.82 at $\mu$ = 100), so the selected $\mu$ is the grid's lower edge
+  and the validation optimum lies at or near $\mu = 0$.
+- **Reconstruction loss $D/(FT)$:** slightly higher, as expected (the penalty trades KL fit for smoothness).
+- **Onset smearing:** onset error grows at σ = 0.05 and 0.10 (the predicted harm); no onsets missed.
+- **Runtime overhead:** baseline inference ≈ 32–35 ms per clip, modified ≈ 35–38 ms (≈ +3–9%), with $O(KT)$ extra
+  work per iteration; dictionary setup ≈ 19 s, shared by both methods.
+- **Ablation:** `smooth_mu0` reproduces the baseline exactly (every quality difference 0), so the differences above
+  come from the penalty alone.
+- **Why it does not help (validation-only diagnosis, Section 9, 2026-11-28):** the baseline's errors are not
+  frame-to-frame jitter. At low noise they sit at note boundaries, where smoothing blurs onsets; at σ = 0.20 they are
+  a raised activation floor in silence, which smoothing cannot lower.
 - **Stress cases:** _TODO_
 - **Least convincing result / known limitations:** baseline $F_1$ falls to 0.545 at noise 0.20, so that setting
   has the most room for the modification but also the most train/test noise mismatch (dictionary learned at 0.005).
