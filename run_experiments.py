@@ -15,11 +15,24 @@ only at scoring.
 
 Methods
 -------
-``config["methods"]`` is an optional list of ``{"label": str}`` entries, each
-with an optional ``"mu_grid"``. An entry without ``"mu_grid"`` runs baseline
-inference; an entry with one runs smoothed inference with ``mu`` selected from
-that grid (``[0.0]`` is the ablation: modified code path, penalty off). Without
-``"methods"`` the run is baseline only, labelled ``"baseline"``.
+``config["methods"]`` is an optional list of ``{"label": str}`` entries. An
+entry may add either
+
+- ``"mu_grid"``: smoothness-penalized inference (the modification), with ``mu``
+  selected from the grid; ``[0.0]`` is the ablation (modified code path,
+  penalty off); or
+- ``"window_grid"`` (odd widths in frames) and optional ``"filter"``
+  (``"mean"`` default, or ``"median"``): baseline inference followed by
+  post-hoc smoothing (the control), with the window selected from the grid.
+
+An entry with neither runs the baseline. Without ``"methods"`` the run is
+baseline only, labelled ``"baseline"``.
+
+Stress cases
+------------
+``config["clip_kwargs"]`` optionally maps ``"dev"``, ``"val"`` and ``"test"`` to
+extra :func:`src.data.make_clip` arguments (``duration_range``,
+``harmonic_amps``, ``coincide``); see :func:`src.protocol.clip_kwargs`.
 
 Outputs, written into ``config["output_dir"]`` (created if needed)
 ------------------------------------------------------------------
@@ -47,7 +60,7 @@ Outputs, written into ``config["output_dir"]`` (created if needed)
                      ``H_scaled`` and ``theta`` belong to the reference method
                      (``"baseline"`` if present, else the first method); every
                      other method adds ``H_scaled__<label>``,
-                     ``theta__<label>`` and ``mu__<label>``.
+                     ``theta__<label>``, ``mu__<label>`` and ``window__<label>``.
 """
 import os
 
@@ -67,7 +80,7 @@ import scipy
 
 from src.alignment import reference_templates
 from src.data import concat_clips, make_clip, split_seeds
-from src.protocol import infer_method, evaluate_setting, learn_dictionary
+from src.protocol import clip_kwargs, evaluate_setting, infer_method, learn_dictionary
 from src.stats import mean_ci
 
 CASE_COLUMNS = ["case_id", "split", "seed", "noise_std", "method", "metric", "value", "runtime_s"]
@@ -93,15 +106,17 @@ def load_config(path):
 
 
 def parse_methods(config):
-    """Read ``config["methods"]`` into a list of ``{"label", "mu_grid"}`` dicts.
+    """Read ``config["methods"]`` into a list of method dicts.
 
-    ``mu_grid`` is ``None`` for baseline inference. Without ``"methods"`` the
-    result is ``[{"label": "baseline", "mu_grid": None}]``.
+    Each dict has keys ``"label"``, ``"mu_grid"``, ``"window_grid"`` and
+    ``"filter"``; unused grids are ``None``. Without ``"methods"`` the result
+    is a single baseline entry.
 
     Raises
     ------
     ValueError
-        If the list is empty, an entry has no label, or labels repeat.
+        If the list is empty, an entry has no label, labels repeat, or an
+        entry has both grids.
     """
     entries = config.get("methods", [{"label": REFERENCE}])
     if not entries:
@@ -110,9 +125,15 @@ def parse_methods(config):
     for entry in entries:
         if "label" not in entry:
             raise ValueError(f"method entry without a label: {entry}")
-        grid = entry.get("mu_grid")
-        methods.append({"label": str(entry["label"]),
-                        "mu_grid": None if grid is None else [float(m) for m in grid]})
+        mu_grid, window_grid = entry.get("mu_grid"), entry.get("window_grid")
+        if mu_grid is not None and window_grid is not None:
+            raise ValueError(f"method {entry['label']!r} has both mu_grid and window_grid")
+        methods.append({
+            "label": str(entry["label"]),
+            "mu_grid": None if mu_grid is None else [float(m) for m in mu_grid],
+            "window_grid": None if window_grid is None else [int(w) for w in window_grid],
+            "filter": str(entry.get("filter", "mean")),
+        })
     labels = [m["label"] for m in methods]
     if len(set(labels)) != len(labels):
         raise ValueError(f"method labels must be unique: {labels}")
@@ -222,7 +243,8 @@ def paired_differences(records, reference=REFERENCE):
 def dev_reference_templates(config):
     """Reference templates r_k (Eq. 10) from development clips only, for the figures."""
     dev_seeds = split_seeds(config["seeds"])["dev"]
-    dev = concat_clips([make_clip(s, noise_std=config["dev_noise_std"]) for s in dev_seeds])
+    dev = concat_clips([make_clip(s, noise_std=config["dev_noise_std"], **clip_kwargs(config, "dev"))
+                        for s in dev_seeds])
     return reference_templates(dev["V"], dev["Y"])["R"]
 
 
@@ -231,13 +253,13 @@ def save_example_clip(path, dictionary, R, config, results, methods):
 
     The clip is the first validation seed at the first configured noise level,
     inferred exactly as in :func:`src.protocol.evaluate_setting` (clip seed,
-    ``n_iter_infer`` iterations, frozen ``W``, the selected ``mu``) and scaled
-    by ``c_k``. ``results[(noise_std, label)]`` holds each method's selected
-    ``"threshold"`` and ``"mu"``.
+    ``n_iter_infer`` iterations, frozen ``W``, the selected ``mu`` or window)
+    and scaled by ``c_k``. ``results[(noise_std, label)]`` is each method's
+    :func:`src.protocol.evaluate_setting` output.
     """
     seed = split_seeds(config["seeds"])["val"][0]
     noise_std = float(config["noise_levels"][0])
-    clip = make_clip(seed, noise_std=noise_std)
+    clip = make_clip(seed, noise_std=noise_std, **clip_kwargs(config, "val"))
     W = np.asarray(dictionary["W"])
     scales = np.asarray(dictionary["scales"])[:, None]
 
@@ -246,13 +268,15 @@ def save_example_clip(path, dictionary, R, config, results, methods):
     arrays = {}
     for label in labels:
         res = results[(noise_std, label)]
-        H_scaled = infer_method(clip["V"], W, config, seed, res["mu"]) / scales
+        H_scaled = infer_method(clip["V"], W, config, seed, mu=res["mu"], window=res["window"],
+                                filter_kind=res["filter"] or "mean") / scales
         if label == ref:
             arrays.update(H_scaled=H_scaled, theta=res["threshold"])
         else:
             arrays[f"H_scaled__{label}"] = H_scaled
             arrays[f"theta__{label}"] = res["threshold"]
             arrays[f"mu__{label}"] = np.nan if res["mu"] is None else res["mu"]
+            arrays[f"window__{label}"] = np.nan if res["window"] is None else res["window"]
 
     np.savez_compressed(
         path,
@@ -293,12 +317,15 @@ def main(argv=None):
         noise_std = float(noise_std)
         for m in methods:
             result = evaluate_setting(dictionary, noise_std, config, method=m["label"],
-                                      mu_grid=m["mu_grid"])
+                                      mu_grid=m["mu_grid"], window_grid=m["window_grid"],
+                                      filter_kind=m["filter"])
             records.extend(result["records"])
             results[(noise_std, m["label"])] = result
             f1 = [r["value"] for r in result["records"] if r["metric"] == "f1"]
-            mu = "" if result["mu"] is None else f", mu {result['mu']:g}"
-            print(f"  noise {noise_std:g} [{m['label']}]: theta {result['threshold']:.2f}{mu}, "
+            extra = "" if result["mu"] is None else f", mu {result['mu']:g}"
+            if result["window"] is not None:
+                extra += f", {result['filter']} window {result['window']}"
+            print(f"  noise {noise_std:g} [{m['label']}]: theta {result['threshold']:.2f}{extra}, "
                   f"test F1 mean {np.mean(f1):.3f}", flush=True)
 
     write_csv(out_dir / "cases.csv", records, CASE_COLUMNS)
@@ -314,11 +341,14 @@ def main(argv=None):
         "config_path": args.config,
         "config": config,
         "methods": methods,
-        "thresholds": [{"noise_std": k[0], "method": k[1], "threshold": v["threshold"], "mu": v["mu"]}
+        "thresholds": [{"noise_std": k[0], "method": k[1], "threshold": v["threshold"],
+                        "mu": v["mu"], "window": v["window"], "filter": v["filter"]}
                        for k, v in results.items()],
         "validation": [{"noise_std": k[0], "method": k[1], "grid": v["grid"],
                         "mean_f1": v["val_mean_f1"], "mu_grid": v["mu_grid"],
-                        "mean_f1_by_mu": v["val_mean_f1_by_mu"]}
+                        "mean_f1_by_mu": v["val_mean_f1_by_mu"],
+                        "window_grid": v["window_grid"],
+                        "mean_f1_by_window": v["val_mean_f1_by_window"]}
                        for k, v in results.items()],
         "best_seed": dictionary["best_seed"],
         "final_losses": dictionary["final_losses"],

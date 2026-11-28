@@ -61,6 +61,28 @@
       "mu_grid": [
         0.0
       ]
+    },
+    {
+      "label": "posthoc_mean",
+      "window_grid": [
+        3,
+        5,
+        9,
+        15,
+        25
+      ],
+      "filter": "mean"
+    },
+    {
+      "label": "posthoc_median",
+      "window_grid": [
+        3,
+        5,
+        9,
+        15,
+        25
+      ],
+      "filter": "median"
     }
   ],
   "output_dir": "results/final"

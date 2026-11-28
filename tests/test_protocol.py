@@ -222,3 +222,65 @@ class TestEvaluateSmooth:
     def test_bad_mu_grid_raises(self, protocol, tiny_dictionary, bad):
         with pytest.raises(ValueError):
             protocol.evaluate_setting(tiny_dictionary, 0.05, tiny_config(), method="smooth", mu_grid=bad)
+
+
+
+# ----------------------------------------------------------------------------
+# Post-hoc control (window_grid) and stress options (clip_kwargs)
+# ----------------------------------------------------------------------------
+WINDOWS = [5, 1, 3]
+
+
+@pytest.mark.parametrize("kind", ["mean", "median"])
+def test_posthoc_contract_and_selection(protocol, tiny_dictionary, kind):
+    out = protocol.evaluate_setting(tiny_dictionary, 0.05, tiny_config(), method=f"posthoc_{kind}",
+                                    window_grid=WINDOWS, filter_kind=kind)
+    assert {r["method"] for r in out["records"]} == {f"posthoc_{kind}"}
+    np.testing.assert_array_equal(out["window_grid"], [1, 3, 5])
+    assert out["filter"] == kind and out["mu"] is None
+    table = out["val_mean_f1_by_window"]
+    assert table.shape == (3, len(out["grid"]))
+    assert out["window"] == out["window_grid"][int(np.argmax(table.max(axis=1)))]
+
+
+def test_posthoc_window_one_matches_baseline(protocol, tiny_dictionary, tiny_evaluation):
+    out = protocol.evaluate_setting(tiny_dictionary, 0.05, tiny_config(), method="w1", window_grid=[1])
+    base_records, base_theta = tiny_evaluation
+    assert out["threshold"] == pytest.approx(base_theta)
+    base = {(int(r["seed"]), r["metric"]): r["value"] for r in base_records}
+    for r in out["records"]:
+        b = base[(int(r["seed"]), r["metric"])]
+        assert (np.isnan(b) and np.isnan(r["value"])) or r["value"] == b
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"mu_grid": [1.0], "window_grid": [3]},
+    {"window_grid": [2]}, {"window_grid": []}, {"window_grid": [3], "filter_kind": "gauss"},
+])
+def test_bad_method_arguments_raise(protocol, tiny_dictionary, kwargs):
+    with pytest.raises(ValueError):
+        protocol.evaluate_setting(tiny_dictionary, 0.05, tiny_config(), **kwargs)
+
+
+def test_clip_kwargs_reach_each_split(protocol, data, monkeypatch):
+    """dev options go to development clips only; val and test options to their own splits."""
+    calls = []
+    real = data.make_clip
+
+    def recorder(seed, *args, **kwargs):
+        calls.append((int(seed), {k: v for k, v in kwargs.items() if k != "noise_std"}))
+        return real(seed, *args, **kwargs)
+
+    monkeypatch.setattr(protocol, "make_clip", recorder)
+    cfg = tiny_config()
+    cfg["clip_kwargs"] = {"dev": {"harmonic_amps": [1, 0.5, 0.3, 0.2, 0.1, 0.1]},
+                          "val": {"duration_range": [0.2, 0.3]},
+                          "test": {"duration_range": [0.1, 0.2]}}
+    d = protocol.learn_dictionary(cfg)
+    protocol.evaluate_setting(d, 0.05, cfg)
+    split = {**{s: "dev" for s in range(*cfg["seeds"]["dev"])},
+             **{s: "val" for s in range(*cfg["seeds"]["val"])},
+             **{s: "test" for s in range(*cfg["seeds"]["test"])}}
+    assert calls
+    for seed, kwargs in calls:
+        assert kwargs == cfg["clip_kwargs"][split[seed]], (seed, kwargs)

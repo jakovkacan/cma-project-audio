@@ -110,6 +110,47 @@ class TestMakeClip:
 # ----------------------------------------------------------------------------
 # split_seeds
 # ----------------------------------------------------------------------------
+class TestStressOptions:
+    """make_clip's stress-case arguments (short notes, changed timbre, coinciding notes)."""
+
+    def test_explicit_defaults_match_default_clip(self, data, clip0):
+        c = data.make_clip(0, duration_range=(0.35, 0.65), coincide=[])
+        np.testing.assert_array_equal(c["V"], clip0["V"])
+        np.testing.assert_array_equal(c["Y"], clip0["Y"])
+
+    def test_one_over_h_profile_matches_default(self, data, clip0):
+        c = data.make_clip(0, harmonic_amps=[1 / h for h in range(1, 7)])
+        np.testing.assert_allclose(c["V"], clip0["V"], rtol=1e-9, atol=1e-12)
+
+    def test_short_notes_are_shorter(self, data):
+        hop = 128 / 8000
+        for seed in range(5):
+            Y = data.make_clip(seed, duration_range=(0.1, 0.2))["Y"]
+            for row in Y:
+                runs = np.diff(np.flatnonzero(np.diff(np.r_[0, row.astype(int), 0])))[::2]
+                assert runs.size == 2
+                assert np.all(runs * hop <= 0.2 + 2 * hop)
+
+    def test_timing_and_noise_unchanged_by_timbre(self, data, clip0):
+        c = data.make_clip(0, harmonic_amps=[1 / h ** 2 for h in range(1, 7)])
+        np.testing.assert_array_equal(c["Y"], clip0["Y"])
+        assert not np.allclose(c["V"], clip0["V"])
+
+    def test_coinciding_pitches_share_activity(self, data, clip0):
+        c = data.make_clip(0, coincide=[(0, 2)])
+        np.testing.assert_array_equal(c["Y"][2], c["Y"][0])
+        np.testing.assert_array_equal(c["Y"][[0, 1]], clip0["Y"][[0, 1]])
+
+    @pytest.mark.parametrize("kwargs", [
+        {"duration_range": (0.0, 0.2)}, {"duration_range": (0.3, 0.2)},
+        {"harmonic_amps": [1, 1, 1]}, {"harmonic_amps": [0] * 6}, {"harmonic_amps": [1, -1, 1, 1, 1, 1]},
+        {"coincide": [(2, 0)]}, {"coincide": [(0, 3)]}, {"coincide": [(0, 2), (1, 2)]},
+    ])
+    def test_invalid_stress_arguments_raise(self, data, kwargs):
+        with pytest.raises(ValueError):
+            data.make_clip(0, **kwargs)
+
+
 class TestSplitSeeds:
     CFG = {"dev": [0, 10], "val": [100, 110], "test": [1000, 1030]}
 

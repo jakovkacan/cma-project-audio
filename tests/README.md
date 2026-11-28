@@ -21,9 +21,10 @@ python -m pytest -x --lf                    # stop at the first failure; rerun l
 
 | File | Guide section | Covers |
 |---|---|---|
-| `test_data.py` | 2 | `make_music`, `make_clip` (keys, shapes, axes, noise pairing, validation), `split_seeds`, `concat_clips` |
+| `test_data.py` | 2 | `make_music`, `make_clip` (keys, shapes, axes, noise pairing, validation, stress options with defaults bit-identical), `split_seeds`, `concat_clips` |
 | `test_baseline.py` | 3 | `kl_divergence`, `init_factors` (exact spec), both updates (hand example, matrix form, fixed point, monotonicity), `normalize_templates`, `fit_nmf` (equivalence to the spec loop, rank-one closed form, exact low-rank recovery, zeros, validation), `fit_nmf_restarts`, `infer_activations` |
 | `test_modified.py` | modification | `neighbour_sums`, `smoothness_penalty` (hand value, constant-in-time is zero, $T=1$), `smooth_objective`, `update_activations_smooth` (hand example, element-wise derivation, $\mu=0$ equals the baseline exactly, single-step descent), `infer_activations_smooth` (same start as the baseline, objective monotone on random data and on a clip, larger $\mu$ trades KL for smoothness, constant activations recovered, validation) |
+| `test_postprocess.py` | control | `smooth_activations` (window 1 is the identity, moving-average hand value, median removes a one-frame spike and keeps a step, constant rows unchanged, rows independent, validation) |
 | `test_alignment.py` | 4 | `reference_templates`, `cosine_similarity`, `match_components` (cyclic permutation, optimality, extra non-note component), `activation_scales` |
 | `test_metrics.py` | 5 | `frame_f1`, `kl_per_entry`, `onset_lags` (late, early, $t=0$, missed, window edges), `select_threshold` (per-clip mean, tie rule) |
 | `test_stats_timing.py` | 6.3–6.4 | `mean_ci`, `time_call` |

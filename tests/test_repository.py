@@ -12,9 +12,9 @@ from conftest import REPO_ROOT
 
 REQUIRED = [
     "README.md", "requirements.txt", ".gitignore", "run_experiments.py", "make_figures.py",
-    "configs/smoke.json", "configs/baseline.json", "configs/final.json", "docs/progress.md",
+    "configs/smoke.json", "configs/baseline.json", "configs/final.json", "configs/stress_short.json", "configs/stress_timbre.json", "docs/progress.md",
     "src/__init__.py", "src/data.py", "src/baseline.py", "src/modified.py", "src/alignment.py", "src/metrics.py",
-    "src/stats.py", "src/timing.py", "src/protocol.py",
+    "src/stats.py", "src/timing.py", "src/protocol.py", "src/postprocess.py",
 ]
 CONFIG_KEYS = {
     "name", "seeds", "dev_noise_std", "noise_levels", "n_components", "restart_seeds",
@@ -90,7 +90,8 @@ def _config(name):
     return json.loads(path.read_text())
 
 
-@pytest.mark.parametrize("name", ["smoke.json", "baseline.json", "final.json"])
+@pytest.mark.parametrize("name", ["smoke.json", "baseline.json", "final.json", "stress_short.json", "stress_timbre.json", "stress_short_wide.json",
+                                  "final_wide.json", "stress_timbre_wide.json"])
 def test_config_has_all_keys(name):
     cfg = _config(name)
     assert CONFIG_KEYS <= set(cfg), f"{name} missing keys: {sorted(CONFIG_KEYS - set(cfg))}"
@@ -144,3 +145,28 @@ def test_final_config_matches_baseline_protocol():
     grids = [m["mu_grid"] for m in final["methods"] if "mu_grid" in m]
     assert any(min(g) > 0 for g in grids), "the modified method must always apply the penalty"
     assert [0.0] in grids, "include the mu = 0 ablation"
+
+
+@pytest.mark.parametrize("name", ["stress_short.json", "stress_timbre.json"])
+def test_stress_configs_change_only_the_clips(name):
+    """A stress run keeps the final protocol and methods; only val/test clips change."""
+    stress, final = _config(name), _config("final.json")
+    for key in CONFIG_KEYS - {"name", "output_dir"}:
+        assert stress[key] == final[key], f"{name} changes '{key}' relative to final.json"
+    assert set(stress["clip_kwargs"]) == {"val", "test"}, "the dictionary must stay the default one"
+    assert stress["clip_kwargs"]["val"] == stress["clip_kwargs"]["test"]
+    final_methods = {m["label"]: m for m in final["methods"]}
+    for m in stress["methods"]:
+        assert m == final_methods[m["label"]]
+
+
+@pytest.mark.parametrize("base", ["final", "stress_short", "stress_timbre"])
+def test_wide_threshold_sensitivity_config(base):
+    """<base>_wide differs from <base> only in a wider threshold grid (and its name/output)."""
+    wide, orig = _config(f"{base}_wide.json"), _config(f"{base}.json")
+    assert set(wide) == set(orig)
+    for key in set(orig) - {"name", "output_dir", "threshold_grid"}:
+        assert wide[key] == orig[key], key
+    assert wide["threshold_grid"]["start"] == orig["threshold_grid"]["start"]
+    assert wide["threshold_grid"]["step"] == orig["threshold_grid"]["step"]
+    assert wide["threshold_grid"]["stop"] > orig["threshold_grid"]["stop"]

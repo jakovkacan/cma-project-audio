@@ -118,20 +118,53 @@ Full suite on 2026-11-24: 203 passed, 1 skipped (the optional `requirements-dev.
   differences in `paired.csv`
 - [x] Ablation: $\mu=0$ with threshold re-selected — `smooth_mu0` in `configs/final.json`; every quality difference
   to the baseline is exactly 0 (checked by `test_ablation_differences_are_zero`)
-- [ ] Extra control: baseline plus post-hoc smoothing filter
-- [ ] Stress: shorter notes
-- [ ] Stress: changed harmonic profile
-- [ ] Stress: notes that always coincide in learning data
+- [x] Extra control: baseline plus post-hoc smoothing filter — `posthoc_mean` and `posthoc_median` in `final.json`
+- [x] Stress: shorter notes — `configs/stress_short.json` (+ `stress_short_wide.json` sensitivity check)
+- [x] Stress: changed harmonic profile — `configs/stress_timbre.json` ($1/h^2$)
+- [ ] Stress: notes that always coincide in learning data — not runnable through the protocol (no single-pitch
+  frames for alignment); see decision log 2026-11-28; covered by the blind joint factorization
 - [ ] Blind joint-factorization demo on one clip — checked numerically by `test_blind_factorization_of_clip0`; no
   figure or write-up yet
 - [x] Timing: warm-up, repeats, setup reported separately, hardware recorded — 1 warm-up + 5 repeats per clip,
   dictionary setup time in `run_info.json`, BLAS pinned to one thread, platform and versions in `run_info.json`
-- [ ] Figures: representative example, overall paired comparison, stress case — `fig_example.png`,
-  `fig_templates.png` and `fig_f1_by_noise.png` exist for the baseline; paired comparison and stress figures to come
+- [x] Figures: representative example, overall paired comparison, stress case — `fig_example_methods.png`,
+  `fig_paired.png` (final and each stress run), `fig_validation.png`, plus the baseline figures
 
 ## 7. Decision log
 
 *Newest first. One entry per decision.*
+
+### 2026-11-28 — Wider threshold grid as a sensitivity check for short notes
+
+- **Context:** in `stress_short` at σ = 0.20 the baseline (and both post-hoc controls) selected θ = 0.95, the top
+  of the grid. Validation $F_1$ was still rising there (0.240 at 0.90, 0.293 at 0.95), so the baseline was limited by
+  the grid, while `smooth` ($\mu$ = 100) found an interior θ = 0.70.
+- **Options considered:** (a) report as is; (b) change `stress_short` itself; (c) keep `stress_short` unchanged and
+  add `stress_short_wide`, identical except that the θ grid runs to 3.0.
+- **Decision:** (c). The trigger is a validation-only rule (selected θ on the grid edge), but the check was added
+  after test results were seen, so it is reported as a post-hoc sensitivity analysis next to the original.
+- **Consequences / follow-ups:** the report must quote both runs. The same check was then applied to `final.json`
+  and `stress_timbre.json` (`final_wide.json`, `stress_timbre_wide.json`): at σ = 0.20 the main baseline's validation
+  curve also rises at 0.95 although its selected θ = 0.35 is inside the grid. Results: the main σ = 0.20 baseline rises
+  0.545 → 0.586 (θ = 1.05); the penalty stays neutral (+0.0007 [−0.0035, +0.0048]); the post-hoc filters help
+  (+0.013 mean, +0.021 median). σ = 0.05 / 0.10 and the timbre case are unchanged. The main configs keep the guide's
+  grid; the wide runs are reported as sensitivity analyses.
+
+### 2026-11-28 — Post-hoc smoothing control and stress cases
+
+- **Control:** `posthoc_mean` (moving average, the linear analogue of the quadratic penalty) and `posthoc_median`
+  (running median, edge-preserving), applied to baseline activations before thresholding, with the window
+  (3, 5, 9, 15, 25 frames) selected jointly with θ on validation. Same selection rule as $\mu$. Code:
+  `src/postprocess.py`, `evaluate_setting(window_grid=..., filter_kind=...)`.
+- **Stress cases:** `stress_short` (notes 0.10–0.20 s) and `stress_timbre` (harmonic amplitudes $1/h^2$) change the
+  validation and test clips only; the dictionary, protocol and methods are those of `final.json` (a test enforces
+  this). Validation clips are stressed too, so every method is re-tuned for the condition it is tested on.
+- **Not run:** notes that always coincide. With two pitches always together the alignment step has no
+  single-pitch frames to build a reference from, so the protocol cannot run; the failure is in dictionary learning,
+  before the penalty acts. Covered by the blind joint factorization instead.
+- **Data generator:** `make_clip` gained `duration_range`, `harmonic_amps` and `coincide`. Defaults are bit-identical
+  to the guide's generator (`test_default_reproduces_make_music_exactly`), and every random draw stays in the same
+  order, so a stressed clip keeps its seed's phases and noise.
 
 ### 2026-11-28 — Joint $\mu$/$\theta$ selection on validation; ablation as a separate method
 
@@ -247,7 +280,10 @@ Full suite on 2026-11-24: 203 passed, 1 skipped (the optional `requirements-dev.
   predictions change *less* often than the labels (80 vs 120 changes). The off-note 95th percentile of the scaled
   activations is ≈ 1.0, which means a raised floor rather than frame-to-frame jitter. A smoothness penalty cannot lower
   a floor.
-- **Next:** paired-comparison figure; post-hoc smoothing control; stress cases; write the hypothesis section honestly.
+- Added the post-hoc control (`src/postprocess.py`), stress options and configs, the paired / validation / per-method
+  example figures, and `docs/report_notes.md` (hypothesis, results, interpretation).
+- Found that the standard threshold grid limits the baseline at σ = 0.20; added `*_wide` sensitivity runs (decision log).
+- **Next:** review `docs/report_notes.md`; finalize the assistance statement; write the report; tag `v1.0-submission`.
 
 ## 10. Open questions
 
@@ -271,29 +307,19 @@ Baseline only so far (`configs/baseline.json`, 30 test clips per setting, mean a
 | 0.10      | 0.55     | 0.933 [0.925, 0.941] | 0.00579  | 0.46 [0.39, 0.54]           | 0             |
 | 0.20      | 0.35     | 0.545 [0.536, 0.554] | 0.01233  | 2.69 [2.67, 2.71]           | 0             |
 
-**First full comparison** (`configs/final.json`, 2026-11-28; 30 paired test clips per setting; `smooth` − `baseline`,
-mean and 95% t-interval over clips, from `results/final/paired.csv`):
+**Final comparison** (2026-11-28). Full tables, stress cases, the threshold-range sensitivity check and the
+interpretation are in [`report_notes.md`](report_notes.md), Section 5. Summary:
 
-| Noise std | Selected $\mu$ | $\Delta F_1$                   | $\Delta D/(FT)$            | $\Delta$ mean \|onset lag\| (frames) | $\Delta$ runtime (ms) |
-|-----------|----------------|--------------------------------|----------------------------|--------------------------------------|-----------------------|
-| 0.05      | 0.3            | −0.0040 [−0.0049, −0.0032]     | +2.0e−6 [+2.0e−6, +2.1e−6] | +0.16 [+0.12, +0.19]                 | +0.9 [−0.4, +2.2]     |
-| 0.10      | 0.3            | −0.0040 [−0.0059, −0.0021]     | +2.6e−6 [+2.5e−6, +2.6e−6] | +0.25 [+0.19, +0.31]                 | +3.1 [+0.2, +6.0]     |
-| 0.20      | 0.3            | −0.0000 [−0.0005, +0.0005]     | +4.1e−6 [+4.0e−6, +4.1e−6] | +0.04 [−0.00, +0.08]                 | +3.0 [+2.1, +3.9]     |
-
-- **Primary metric:** the penalty does not improve $F_1$ at any setting. It is slightly but clearly worse at
-  σ = 0.05 and 0.10, and indistinguishable at 0.20. Validation $F_1$ falls steadily with $\mu$ at every level
-  (e.g. σ = 0.10: 0.931 at $\mu$ = 0.3 down to 0.82 at $\mu$ = 100), so the selected $\mu$ is the grid's lower edge
-  and the validation optimum lies at or near $\mu = 0$.
-- **Reconstruction loss $D/(FT)$:** slightly higher, as expected (the penalty trades KL fit for smoothness).
-- **Onset smearing:** onset error grows at σ = 0.05 and 0.10 (the predicted harm); no onsets missed.
-- **Runtime overhead:** baseline inference ≈ 32–35 ms per clip, modified ≈ 35–38 ms (≈ +3–9%), with $O(KT)$ extra
-  work per iteration; dictionary setup ≈ 19 s, shared by both methods.
-- **Ablation:** `smooth_mu0` reproduces the baseline exactly (every quality difference 0), so the differences above
-  come from the penalty alone.
-- **Why it does not help (validation-only diagnosis, Section 9, 2026-11-28):** the baseline's errors are not
-  frame-to-frame jitter. At low noise they sit at note boundaries, where smoothing blurs onsets; at σ = 0.20 they are
-  a raised activation floor in silence, which smoothing cannot lower.
-- **Stress cases:** _TODO_
+- **Primary metric:** the penalty never improves $F_1$. $\Delta F_1$ = −0.0040 [−0.0049, −0.0032] at σ = 0.05,
+  −0.0040 [−0.0059, −0.0021] at 0.10, −0.0000 [−0.0005, +0.0005] at 0.20 (30 paired clips each, `results/final/paired.csv`).
+  Validation picks the smallest $\mu$ (0.3) everywhere.
+- **Onset smearing:** +0.16 and +0.25 frames at σ = 0.05 and 0.10 (predicted harm confirmed).
+- **Ablation:** `smooth_mu0` identical to the baseline.
+- **Control:** the running median helps at σ = 0.10 (+0.0047 [+0.0034, +0.0060]); the moving average behaves like the
+  penalty.
+- **Stress:** short notes double the penalty's cost at σ = 0.05 / 0.10; changed timbre: no recovery. The short-note
+  σ = 0.20 "win" (+0.11) is a threshold-grid artefact and reverses to −0.05 with a wider grid.
+- **Runtime:** +1–3 ms per clip (3–8%); ≈ 1 ms differences are within timing noise.
 - **Least convincing result / known limitations:** baseline $F_1$ falls to 0.545 at noise 0.20, so that setting
   has the most room for the modification but also the most train/test noise mismatch (dictionary learned at 0.005).
 
@@ -318,6 +344,8 @@ mean and 95% t-interval over clips, from `results/final/paired.csv`):
 
 - **Paper:** P. Smaragdis and J. C. Brown (2003), WASPAA, 177–180.
 - **External methods / code cited:**
+    - T. Virtanen (2007), IEEE TASLP 15(3), 1066–1074 — temporal continuity (smoothness) penalty.
+    - `scipy.ndimage.uniform_filter1d`, `scipy.ndimage.median_filter` — post-hoc smoothing control.
     - D. D. Lee and H. S. Seung (2001), "Algorithms for non-negative matrix factorization", NIPS 13 —
       multiplicative KL updates.
     - `scipy.signal.stft` (spectrograms), `scipy.optimize.linear_sum_assignment` (Hungarian matching).
@@ -330,3 +358,7 @@ mean and 95% t-interval over clips, from `results/final/paired.csv`):
     - fixes for `onset_lags`, `select_threshold`, `time_call`
     - `run_experiments.py`
     - `README.md` and filling in this log from the code, configs and saved results
+    - Modification milestone (2026-11-28): `src/modified.py` and `tests/test_modified.py`; the protocol and runner
+      extensions (`mu_grid`, `window_grid`, `clip_kwargs`, `paired.csv`); `src/postprocess.py`; the stress options in
+      `src/data.py`; `configs/final.json` and the stress configs; the paired, validation and per-method example
+      figures in `make_figures.py`; the related tests; `docs/report_notes.md`

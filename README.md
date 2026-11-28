@@ -9,9 +9,14 @@ their activations over time. A dictionary is learned on development clips, align
 infer activations on held-out clips, which are thresholded into note predictions and scored against the
 ground-truth note activity.
 
-**Status:** the baseline is complete and tested (tag `v0.1-baseline`). The temporal-smoothness modification
-(`src/modified.py`) and the baseline-vs-modified protocol (`configs/final.json`) are implemented; figures for the
-paired comparison, the post-hoc smoothing control and the stress cases are still to come.
+**Modification:** a temporal smoothness penalty on the activations (Virtanen, 2007), $\frac{\mu}{2}\sum_{k,t}
+(H_{kt}-H_{k,t-1})^2$, added to the KL objective during frozen-dictionary inference (`src/modified.py`). It is
+compared with the baseline, a $\mu = 0$ ablation, and two post-hoc smoothing controls (moving average and running
+median, `src/postprocess.py`), on three noise levels and two stress cases.
+
+**Status:** baseline complete and tagged (`v0.1-baseline`); modification, control, stress cases and figures
+implemented. Main finding: the penalty does not improve frame $F_1$ on the main settings; see
+[`docs/report_notes.md`](docs/report_notes.md) for the hypothesis, results and interpretation.
 
 ## Installation
 
@@ -30,15 +35,15 @@ python -m pip install -r requirements.txt
 All commands run from the repository root.
 
 ```bash
-python -m pytest                                       # checks, ~50 s
-python run_experiments.py --config configs/smoke.json  # smoke run, ~3 s
+python -m pytest                                       # checks, ~1 min
+python run_experiments.py --config configs/smoke.json  # smoke run, both methods, ~5 s
 python make_figures.py --results results/smoke         # figures, ~1 s
 ```
 
 ## Checks
 
 ```bash
-python -m pytest                    # full suite, ~50 s (274 passed, 1 skipped)
+python -m pytest                    # full suite, ~1 min (323 passed, 1 skipped)
 python -m pytest -m "not slow"      # quick loop
 python -m pytest tests/test_baseline.py
 python -m pytest -rs                # list skipped tests and why
@@ -52,18 +57,37 @@ the hand-computed update examples, monotonicity checks and data-leakage checks o
 
 | Config                  | Dev / val / test clips | Noise levels      | Restarts | Run time |
 |-------------------------|------------------------|-------------------|----------|----------|
-| `configs/smoke.json`    | 3 / 3 / 5              | 0.05, 0.20        | 2        | ~3 s     |
+| `configs/smoke.json`    | 3 / 3 / 5              | 0.05, 0.20        | 2        | ~5 s     |
 | `configs/baseline.json` | 10 / 10 / 30           | 0.05, 0.10, 0.20  | 4        | ~40 s    |
-| `configs/final.json`    | 10 / 10 / 30           | 0.05, 0.10, 0.20  | 4        | ~90 s    |
+| `configs/final.json`    | 10 / 10 / 30           | 0.05, 0.10, 0.20  | 4        | ~2.5 min |
+| `configs/stress_short.json`  | 10 / 10 / 30      | 0.05, 0.10, 0.20  | 4        | ~2 min   |
+| `configs/stress_timbre.json` | 10 / 10 / 30      | 0.05, 0.10, 0.20  | 4        | ~2 min   |
+| `configs/final_wide.json`, `stress_short_wide.json`, `stress_timbre_wide.json` | 10 / 10 / 30 | 0.05, 0.10, 0.20 | 4 | ~2.5 min each |
 
-`smoke.json` runs `baseline` and `smooth`; `baseline.json` runs the baseline only; `final.json` runs `baseline`,
-`smooth` and the ablation `smooth_mu0`. The methods come from the config's optional `methods` list: an entry without
-`mu_grid` runs baseline inference, an entry with one runs smoothed inference with $\mu$ selected from that grid.
+**Methods.** Each config's optional `methods` list names the methods to run on identical clips:
+
+| Label            | What it runs                                                                 | Also tuned on validation |
+|------------------|------------------------------------------------------------------------------|--------------------------|
+| `baseline`       | KL inference with frozen $W$ (no grid in the entry)                          | —                        |
+| `smooth`         | smoothness-penalized inference (`"mu_grid"`)                                 | $\mu$                    |
+| `smooth_mu0`     | the penalized code path with `"mu_grid": [0.0]` (ablation)                   | —                        |
+| `posthoc_mean`   | baseline, then a moving average of $H$ (`"window_grid"`, `"filter": "mean"`) | window                   |
+| `posthoc_median` | baseline, then a running median of $H$ (`"filter": "median"`)               | window                   |
+
+`smoke.json` runs `baseline` and `smooth`; `baseline.json` the baseline only; `final.json` all five. The stress
+configs keep `final.json`'s protocol and methods (without the ablation) and change only the validation and test clips
+through `"clip_kwargs"`: notes of 0.10–0.20 s (`stress_short`) or harmonic amplitudes $1/h^2$ (`stress_timbre`).
+The `*_wide` configs repeat `final`, `stress_short` and `stress_timbre` with the threshold grid widened to 3.0: a
+sensitivity check, added because at σ = 0.20 the best threshold can lie above the standard grid's top value of 0.95.
 
 ```bash
 python run_experiments.py --config configs/baseline.json
 python make_figures.py --results results/baseline
-python run_experiments.py --config configs/final.json      # baseline vs modified
+python run_experiments.py --config configs/final.json      # baseline vs modified vs controls
+python make_figures.py --results results/final
+for c in stress_short stress_timbre final_wide stress_short_wide stress_timbre_wide; do
+  python run_experiments.py --config configs/$c.json && python make_figures.py --results results/$c
+done
 ```
 
 Times are wall-clock on an Apple silicon laptop with BLAS pinned to one thread (`run_experiments.py` sets
@@ -96,7 +120,10 @@ Each run writes to the `output_dir` set in its config (`results/<name>/`, ignore
 | `example_clip.npz`  | One fixed validation clip with $V$, $Y$, scaled $H$, $\theta$, aligned $W$ and references $R$  |
 | `figures/fig_example.png`     | Spectrogram, true note activity and scaled activations with $\theta$                 |
 | `figures/fig_templates.png`   | Learned templates against the reference templates, one panel per pitch               |
-| `figures/fig_f1_by_noise.png` | Per-clip test $F_1$ with mean and 95% interval, per noise level                      |
+| `figures/fig_f1_by_noise.png` | Per-clip test $F_1$ with mean and 95% interval, per noise level and method           |
+| `figures/fig_paired.png`      | Per-clip differences to the baseline ($F_1$ and onset error) with mean and 95% interval (only with `paired.csv`) |
+| `figures/fig_validation.png`  | Best validation $F_1$ against $\mu$ or window, per noise level, with the baseline as a dashed line (only for tuned methods) |
+| `figures/fig_example_methods.png` | The example clip's scaled activations for every method that changes them      |
 
 `make_figures.py` reads only these saved files; it never refits or reruns inference.
 
@@ -143,18 +170,21 @@ Noise is drawn independently of the notes, so the same seed gives the same notes
 ```
 ├── run_experiments.py   config -> protocol -> CSV + JSON
 ├── make_figures.py      saved results -> PNG figures
-├── configs/             smoke.json, baseline.json, final.json
+├── configs/             smoke, baseline, final, stress_short, stress_timbre, stress_short_wide
 ├── src/
-│   ├── data.py          synthetic clips, seed splits, concatenation
+│   ├── data.py          synthetic clips (with stress options), seed splits, concatenation
 │   ├── baseline.py      KL divergence, multiplicative updates, fit with restarts, frozen inference
 │   ├── modified.py      temporal smoothness penalty, penalized H update, frozen inference
+│   ├── postprocess.py   post-hoc moving-average / running-median smoothing (control)
 │   ├── alignment.py     reference templates, component matching, activation scales
 │   ├── metrics.py       frame F1, KL per entry, onset lags, threshold selection
-│   ├── protocol.py      learn_dictionary, evaluate_setting
+│   ├── protocol.py      learn_dictionary, evaluate_setting (baseline / modified / control)
 │   ├── stats.py         mean with Student-t interval
 │   └── timing.py        warm-up + repeated timing
 ├── tests/               pytest suite (see tests/README.md)
-└── docs/progress.md     decisions, problems and progress log
+└── docs/
+    ├── progress.md      decisions, problems and progress log
+    └── report_notes.md  hypothesis, results and interpretation, drafted for the report
 ```
 
 ## Scope
@@ -162,6 +192,8 @@ Noise is drawn independently of the notes, so the same seed gives the same notes
 - **Reproduced:** generalized-KL NMF with multiplicative updates; templates in $W$, activations in $H$.
 - **Added (not in the paper):** dictionary learned on development clips, frozen, activations inferred on held-out
   clips; validation-selected threshold; paired per-clip evaluation.
+- **Modification (not in the paper):** temporal smoothness penalty on $H$ during inference, after Virtanen (2007);
+  post-hoc smoothing filters as a control.
 - **Not reproduced:** the paper's real piano recording, the Euclidean-cost experiments and the energy-penalty
   variant.
 - The printed gradient labels in the paper's Eqs. (5)–(6) are dimensionally swapped; the code uses the explicit KL
@@ -172,7 +204,12 @@ Noise is drawn independently of the notes, so the same seed gives the same notes
 - P. Smaragdis and J. C. Brown, "Non-negative matrix factorization for polyphonic music transcription," *IEEE
   WASPAA*, 2003, pp. 177–180.
 - D. D. Lee and H. S. Seung, "Algorithms for non-negative matrix factorization," *NIPS*, 2001.
+- T. Virtanen, "Monaural sound source separation by nonnegative matrix factorization with temporal continuity and
+  sparseness criteria," *IEEE TASLP*, 15(3), 1066–1074, 2007 (the smoothness penalty).
+- SciPy: `scipy.ndimage.uniform_filter1d` and `median_filter` for the post-hoc control.
 - SciPy: `scipy.signal.stft` for spectrograms, `scipy.optimize.linear_sum_assignment` for component matching.
 - AI assistance (Claude Code) was used for the test suite, docstrings, `reference_templates`, `select_threshold`,
-  fixes in `metrics.py` and `timing.py`, `run_experiments.py`, and this README. Details are in
+  fixes in `metrics.py` and `timing.py`, `run_experiments.py`, this README, and in the modification milestone for
+  `src/modified.py`, `src/postprocess.py`, the protocol and runner extensions, the stress options in `src/data.py`,
+  the new figures in `make_figures.py` and `docs/report_notes.md`. Details are in
   [`docs/progress.md`](docs/progress.md), Section 13.

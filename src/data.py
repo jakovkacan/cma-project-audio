@@ -81,12 +81,22 @@ def make_music(seed, fs=8000, seconds=6):
     return np.abs(Z), active[:, indices], freq, frames
 
 
-def make_clip(seed, noise_std=0.005, fs=8000, seconds=6):
+DEFAULT_DURATION_RANGE = (0.35, 0.65)
+N_HARMONICS = 6
+
+
+def make_clip(seed, noise_std=0.005, fs=8000, seconds=6, duration_range=None,
+              harmonic_amps=None, coincide=None):
     """Synthesize a harmonic audio clip with a configurable noise level.
 
     Same generator as :func:`make_music`, but the additive Gaussian noise level
     can be set, and the result is returned as a dict. For a given ``seed`` and
-    ``noise_std=0.005`` the output matches :func:`make_music` exactly.
+    ``noise_std=0.005`` (other arguments at their defaults) the output matches
+    :func:`make_music` exactly.
+
+    The three optional arguments define the stress cases. They change the music
+    only; every random draw happens in the same order as with the defaults, so
+    the same seed keeps the same phases and noise.
 
     Parameters
     ----------
@@ -100,6 +110,16 @@ def make_clip(seed, noise_std=0.005, fs=8000, seconds=6):
         Sampling frequency in Hz.
     seconds : float, optional
         Duration of the clip in seconds.
+    duration_range : (float, float), optional
+        Note durations are drawn uniformly from ``[low, high)`` seconds.
+        Default ``(0.35, 0.65)``; the short-note stress case uses shorter notes.
+    harmonic_amps : sequence of 6 floats, optional
+        Amplitude of harmonics 1-6 (non-negative, not all zero). Default
+        ``1 / h``; the changed-timbre stress case uses another profile.
+    coincide : sequence of (int, int) pairs, optional
+        Each pair ``(leader, follower)`` of pitch indices with
+        ``leader < follower`` makes the follower's notes start and end exactly
+        with the leader's, so the two pitches never sound apart.
 
     Returns
     -------
@@ -114,21 +134,45 @@ def make_clip(seed, noise_std=0.005, fs=8000, seconds=6):
     Raises
     ------
     ValueError
-        If ``noise_std`` is negative or not finite.
+        If ``noise_std`` is negative or not finite, ``duration_range`` is not
+        ``0 < low <= high``, ``harmonic_amps`` does not hold 6 non-negative
+        values with a positive sum, or a ``coincide`` pair is invalid.
     """
     if not np.isfinite(noise_std) or noise_std < 0.0:
         raise ValueError("noise_std must be non-negative and finite.")
+
+    low, high = DEFAULT_DURATION_RANGE if duration_range is None else duration_range
+    if not (0.0 < low <= high):
+        raise ValueError("duration_range must satisfy 0 < low <= high.")
+
+    if harmonic_amps is not None:
+        amps = np.asarray(harmonic_amps, dtype=float)
+        if amps.shape != (N_HARMONICS,) or np.any(amps < 0) or not np.all(np.isfinite(amps)) \
+                or amps.sum() <= 0:
+            raise ValueError("harmonic_amps must hold 6 finite, non-negative values with a positive sum.")
+
+    leader_of = {}
+    for pair in (coincide or []):
+        leader, follower = (int(i) for i in pair)
+        if not (0 <= leader < follower < 3) or follower in leader_of:
+            raise ValueError("coincide pairs must be (leader, follower) with 0 <= leader < follower < 3.")
+        leader_of[follower] = leader
 
     rng = np.random.default_rng(seed)
     time = np.arange(int(fs * seconds)) / fs
     pitches = [220.0, 277.18, 329.63]
     audio = np.zeros_like(time)
     active = np.zeros((3, len(time)), dtype=bool)
+    timings = {}
 
     for k, f0 in enumerate(pitches):
         starts = [0.2 + 0.8 * k, rng.uniform(3.0, 4.8)]
-        for start in starts:
-            duration = rng.uniform(0.35, 0.65)
+        drawn = []
+        for i, start in enumerate(starts):
+            duration = rng.uniform(low, high)
+            if k in leader_of:  # draws above still happen, so later draws are unchanged
+                start, duration = timings[leader_of[k]][i]
+            drawn.append((start, duration))
             age = time - start
             on = (age >= 0) & (age < duration)
             envelope = np.zeros_like(time)
@@ -136,15 +180,18 @@ def make_clip(seed, noise_std=0.005, fs=8000, seconds=6):
                     (1 - np.exp(-age[on] / 0.02))
                     * np.exp(-age[on] / 0.5))
             tone = np.zeros_like(time)
-            for harmonic in range(1, 7):
+            for harmonic in range(1, N_HARMONICS + 1):
                 frequency = harmonic * f0
                 if frequency < fs / 2:
                     phase = rng.uniform(0, 2 * np.pi)
-                    tone += np.sin(
-                        2 * np.pi * frequency * time + phase
-                    ) / harmonic
+                    wave = np.sin(2 * np.pi * frequency * time + phase)
+                    if harmonic_amps is None:
+                        tone += wave / harmonic  # exactly as make_music (bit-identical)
+                    else:
+                        tone += amps[harmonic - 1] * wave
             audio += envelope * tone
             active[k] |= on
+        timings[k] = drawn
 
     audio += noise_std * rng.normal(size=len(time))
     freq, frames, Z = stft(

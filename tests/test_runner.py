@@ -138,7 +138,9 @@ def test_baseline_only_run_writes_no_paired_csv(run_output):
 # Baseline vs modified in one run ("methods" in the config)
 # ----------------------------------------------------------------------------
 METHODS = [{"label": "baseline"}, {"label": "smooth", "mu_grid": [1.0, 10.0]},
-           {"label": "smooth_mu0", "mu_grid": [0.0]}]
+           {"label": "smooth_mu0", "mu_grid": [0.0]},
+           {"label": "posthoc_median", "window_grid": [3, 5], "filter": "median"}]
+TUNED = {"smooth", "smooth_mu0", "posthoc_median"}
 PAIRED_COLUMNS = ["noise_std", "method", "reference", "metric", "mean_diff", "low", "high", "sd", "n"]
 
 
@@ -179,10 +181,10 @@ class TestRunMethods:
         cfg, out = methods_output
         header, rows = _read_csv(out / "paired.csv")
         assert header == PAIRED_COLUMNS
-        assert {r["method"] for r in rows} == {"smooth", "smooth_mu0"}
+        assert {r["method"] for r in rows} == TUNED
         assert {r["reference"] for r in rows} == {"baseline"}
         assert {r["metric"] for r in rows} == CASE_METRICS | {"runtime_s"}
-        assert len(rows) == 2 * len(cfg["noise_levels"]) * (len(CASE_METRICS) + 1)
+        assert len(rows) == len(TUNED) * len(cfg["noise_levels"]) * (len(CASE_METRICS) + 1)
 
     def test_paired_matches_cases(self, methods_output):
         _, out = methods_output
@@ -215,6 +217,8 @@ class TestRunMethods:
             assert rows[(sigma, "baseline")]["mu"] is None
             assert rows[(sigma, "smooth")]["mu"] in (1.0, 10.0)
             assert rows[(sigma, "smooth_mu0")]["mu"] == 0.0
+            assert rows[(sigma, "posthoc_median")]["window"] in (3, 5)
+            assert rows[(sigma, "posthoc_median")]["filter"] == "median"
         for v in info["validation"]:
             if v["method"] == "smooth":
                 assert np.asarray(v["mean_f1_by_mu"]).shape == (2, len(v["grid"]))
@@ -223,7 +227,7 @@ class TestRunMethods:
         _, out = methods_output
         with np.load(out / "example_clip.npz") as z:
             assert str(z["reference_method"]) == "baseline"
-            for label in ("smooth", "smooth_mu0"):
+            for label in TUNED:
                 assert z[f"H_scaled__{label}"].shape == z["H_scaled"].shape
             np.testing.assert_array_equal(z["H_scaled__smooth_mu0"], z["H_scaled"])
 
@@ -239,6 +243,17 @@ class TestRunMethods:
         _, out = methods_output
         proc = _run([str(FIGURES), "--results", str(out)], timeout=300)
         assert proc.returncode == 0, f"make_figures.py failed:\n{proc.stderr}"
+        for name in ("fig_example.png", "fig_templates.png", "fig_f1_by_noise.png", "fig_paired.png",
+                     "fig_validation.png", "fig_example_methods.png"):
+            path = out / "figures" / name
+            assert path.is_file(), f"missing figures/{name}"
+            assert path.read_bytes()[:8] == PNG_MAGIC
+
+    def test_both_grids_fail(self, tmp_path):
+        cfg = tiny_config(str(tmp_path / "out"))
+        cfg["methods"] = [{"label": "baseline"}, {"label": "x", "mu_grid": [1.0], "window_grid": [3]}]
+        path = tmp_path / "both.json"; path.write_text(json.dumps(cfg))
+        assert _run([str(RUNNER), "--config", str(path)]).returncode != 0
 
 
 class TestMakeFigures:
@@ -251,5 +266,7 @@ class TestMakeFigures:
         for name in ("fig_example.png", "fig_templates.png", "fig_f1_by_noise.png"):
             path = out / "figures" / name
             assert path.is_file(), f"missing figures/{name}"
+        for name in ("fig_paired.png", "fig_validation.png", "fig_example_methods.png"):
+            assert not (out / "figures" / name).exists(), f"baseline-only run should not write {name}"
             assert path.read_bytes()[:8] == PNG_MAGIC, f"{name} is not a PNG"
             assert path.stat().st_size > 1000

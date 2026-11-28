@@ -76,6 +76,11 @@ def modified():
 
 
 @pytest.fixture(scope="session")
+def postprocess():
+    return _import_or_skip("src.postprocess")
+
+
+@pytest.fixture(scope="session")
 def alignment():
     return _import_or_skip("src.alignment")
 
